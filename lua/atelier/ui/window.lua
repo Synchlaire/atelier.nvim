@@ -14,6 +14,8 @@ local NS = vim.api.nvim_create_namespace('atelier.picker')
 ---@field prev_lines string[]
 ---@field on_close fun()|nil
 ---@field on_cursor fun(row: atelier.PickerRow|nil)|nil
+---@field private _bus_listener fun()        Reference held so we can unsubscribe on close.
+---@field private _closed boolean
 local Window = {}
 Window.__index = Window
 
@@ -52,36 +54,61 @@ function M.open(state)
     prev_lines = {},
     on_close = nil,
     on_cursor = nil,
+    _closed = false,
   }, Window)
 
   -- CursorMoved drives both highlighting and the preview module.
   vim.api.nvim_create_autocmd('CursorMoved', {
     buffer = buf,
     callback = function()
+      if self._closed then return end
       if self.on_cursor then self.on_cursor(self:current_row()) end
     end,
   })
 
-  vim.api.nvim_create_autocmd({ 'BufWipeout', 'BufLeave' }, {
+  -- Only BufWipeout means the picker is actually gone — BufLeave fires on
+  -- *any* buffer switch and would prematurely cleanup() while the picker
+  -- is still alive.
+  vim.api.nvim_create_autocmd('BufWipeout', {
     buffer = buf,
     once = true,
-    callback = function()
-      if self.on_close then self.on_close() end
-    end,
+    callback = function() self:_dispose() end,
   })
 
-  -- Re-render whenever state changes.
-  state.bus:on('state_changed', function() self:render() end)
+  -- Re-render whenever state changes. Hold a reference so we can
+  -- unsubscribe on dispose — anonymous listeners would otherwise leak
+  -- across every open/close cycle and fire against wiped buffers.
+  self._bus_listener = function() self:render() end
+  state.bus:on('state_changed', self._bus_listener)
 
   return self
 end
 
+function Window:_dispose()
+  if self._closed then return end
+  self._closed = true
+  if self._bus_listener then
+    self.state.bus:off('state_changed', self._bus_listener)
+    self._bus_listener = nil
+  end
+  if self.on_close then
+    pcall(self.on_close)
+    self.on_close = nil
+  end
+end
+
 ---@param view atelier.PickerView
 local function apply_diff(self, view)
+  if self._closed or not vim.api.nvim_buf_is_valid(self.buf) then return end
+
   local prev = self.prev_lines
   local next_lines = view.lines
 
-  vim.api.nvim_set_option_value('modifiable', true, { buf = self.buf })
+  -- Wrap modifiable mutations in pcall so a transient race (e.g. buffer
+  -- becoming invalid mid-render after a deferred state_changed fires)
+  -- can't escape and crash the picker.
+  local mod_ok = pcall(vim.api.nvim_set_option_value, 'modifiable', true, { buf = self.buf })
+  if not mod_ok then return end
 
   -- Find the first and last differing rows. For typical incremental
   -- updates (a status flip on one row) only that one line gets rewritten,
@@ -97,7 +124,7 @@ local function apply_diff(self, view)
 
   if first_diff > n_prev and first_diff > n_next then
     -- Identical: nothing to do.
-    vim.api.nvim_set_option_value('modifiable', false, { buf = self.buf })
+    pcall(vim.api.nvim_set_option_value, 'modifiable', false, { buf = self.buf })
     return
   end
 
@@ -114,12 +141,11 @@ local function apply_diff(self, view)
   for i = first_diff, last_diff_next do
     replacement[#replacement + 1] = next_lines[i]
   end
-  vim.api.nvim_buf_set_lines(self.buf, first_diff - 1, last_diff_prev, false, replacement)
-
-  vim.api.nvim_set_option_value('modifiable', false, { buf = self.buf })
+  pcall(vim.api.nvim_buf_set_lines, self.buf, first_diff - 1, last_diff_prev, false, replacement)
+  pcall(vim.api.nvim_set_option_value, 'modifiable', false, { buf = self.buf })
 
   -- Highlights: easier to clear & re-apply than to diff. They're cheap.
-  vim.api.nvim_buf_clear_namespace(self.buf, NS, 0, -1)
+  pcall(vim.api.nvim_buf_clear_namespace, self.buf, NS, 0, -1)
   for _, h in ipairs(view.highlights) do
     pcall(vim.api.nvim_buf_set_extmark, self.buf, NS, h.line, h.col_start, {
       end_col = h.col_end >= 0 and h.col_end or nil,
@@ -133,7 +159,7 @@ local function apply_diff(self, view)
 end
 
 function Window:render()
-  if not vim.api.nvim_buf_is_valid(self.buf) then return end
+  if self._closed or not vim.api.nvim_buf_is_valid(self.buf) then return end
   local Picker = require('atelier.ui.picker')
   local view = Picker.render(self.state)
   apply_diff(self, view)
