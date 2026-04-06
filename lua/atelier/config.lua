@@ -2,7 +2,7 @@
 -- read the normalized form (atelier.Config) and never see the raw user input.
 --
 ---@class atelier.ThemeSpec
----@field name string         Repo basename, used as the directory name and the user-visible label.
+---@field name string         User-visible label and (after sanitization) install dir name. Defaults to the repo basename minus .git/.nvim; can be overridden via the `name` field on a table spec.
 ---@field url string|nil      Git URL, or nil for built-ins / already-installed colorschemes.
 ---@field source string       The original spec ('owner/repo', a name, or an absolute path).
 ---@field branch string|nil   Branch / tag / commit to check out.
@@ -90,10 +90,30 @@ local function normalize_one(raw)
     error('[atelier] theme spec must be a string or table, got ' .. type(raw))
   end
 
-  local name = basename(source):gsub('%.git$', ''):gsub('%.nvim$', '')
-  -- Keep the .nvim suffix in the *directory* name to avoid collisions, but
-  -- the user-facing name is the stripped version. We restore the dir name
-  -- when computing local paths in the manager.
+  -- Default name: basename minus .git/.nvim suffixes. An explicit `name`
+  -- on the spec table always wins. We also fall back to the owner segment
+  -- when the basename is meaningless on its own (e.g. `owner/nvim`), so
+  -- repos like `black-atom-industries/nvim` don't collapse to just `nvim`.
+  local name
+  if type(extra.name) == 'string' and extra.name ~= '' then
+    name = extra.name
+  else
+    local base = basename(source):gsub('%.git$', '')
+    local stripped = base:gsub('%.nvim$', '')
+    if stripped == '' then stripped = base end
+
+    if (stripped == 'nvim' or stripped == 'vim') and source:find('/', 1, true) then
+      -- basename is too generic; prefer "owner-base", e.g. "black-atom-industries-nvim"
+      local owner = source:match('^([^/]+)/')
+      if owner and owner ~= '' then
+        name = owner .. '-' .. stripped
+      else
+        name = stripped
+      end
+    else
+      name = stripped
+    end
+  end
 
   local spec = {
     name = name,
