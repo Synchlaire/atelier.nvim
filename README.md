@@ -78,14 +78,21 @@ require('atelier').setup({
 
 ## Picker keys
 
-| Key       | Action                          |
-|-----------|---------------------------------|
-| `<CR>`    | Commit the previewed theme      |
-| `q`/`<Esc>` | Cancel and restore the original |
-| `I`       | Install missing                 |
-| `U`       | Update all                      |
-| `C`       | Clean unused                    |
-| `R`       | Force redraw                    |
+The picker groups themes by spec. Each group has a header (`▾`/`▸`) you can fold open or closed. When the list is long (more than ~6 specs) atelier starts collapsed.
+
+| Key                 | Action                                                |
+|---------------------|-------------------------------------------------------|
+| `<CR>`              | Commit the previewed theme (or toggle fold on a header) |
+| `<Tab>`             | Toggle fold under the cursor                          |
+| `zo` / `zc`         | Open / close fold                                     |
+| `zR` / `zM`         | Expand all / collapse all                             |
+| `/`                 | Inline filter — type to narrow live, `<Esc>` clears   |
+| `<C-/>`             | Hand off to `snacks.picker` (falls back to inline `/`) |
+| `q` / `<Esc>`       | Close (or clear filter if one is active)              |
+| `I` / `U` / `C`     | Install missing / update all / clean unused           |
+| `R`                 | Force redraw                                          |
+
+Filtering force-expands any spec whose name or variants match, so a search like `/dark` immediately surfaces every dark variant across every group.
 
 ## Lua API
 

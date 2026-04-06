@@ -9,10 +9,16 @@
 ---@field error string|nil       First line of stderr if status == 'failed'.
 ---@field progress integer       0..100, only meaningful while installing/updating.
 ---@field themes string[]|nil    Cached list of theme names (from colors/*.lua|vim) once known.
+---@field expanded boolean       Picker UI state: is this spec's variant list visible.
 
 ---@class atelier.Current
 ---@field spec_name string|nil   Name of the spec that owns the active theme.
 ---@field theme string|nil       The actual `:colorscheme` value.
+
+---@class atelier.UiState
+---@field filter string                  Current filter query (lowercased). Empty = no filter.
+---@field mode 'normal'|'filter'         Picker input mode.
+---@field collapsed_default boolean      What `expanded` defaults to when a new spec runtime is created.
 
 ---@class atelier.State
 ---@field config atelier.Config
@@ -21,6 +27,7 @@
 ---@field by_name table<string, atelier.ThemeRuntime>
 ---@field current atelier.Current
 ---@field last_good atelier.Current          Persisted snapshot for restore-on-cancel and crash recovery.
+---@field ui atelier.UiState                  Picker UI state. Reset on each picker open.
 
 local Bus = require('atelier.events')
 
@@ -36,6 +43,11 @@ function M.new(config)
     by_name = {},
     current = { spec_name = nil, theme = nil },
     last_good = { spec_name = nil, theme = nil },
+    ui = {
+      filter = '',
+      mode = 'normal',
+      collapsed_default = (#config.themes > 6), -- big lists start collapsed
+    },
   }
 
   for _, spec in ipairs(config.themes) do
@@ -46,12 +58,22 @@ function M.new(config)
       error = nil,
       progress = 0,
       themes = nil,
+      expanded = not state.ui.collapsed_default,
     }
     state.themes[#state.themes + 1] = rt
     state.by_name[spec.name] = rt
   end
 
   return state
+end
+
+---Reset the UI substate (filter, mode) without touching install state or
+---fold state. Called when the picker opens so a stale `mode = 'filter'`
+---can't survive between sessions.
+---@param state atelier.State
+function M.reset_ui(state)
+  state.ui.filter = ''
+  state.ui.mode = 'normal'
 end
 
 ---Find a runtime entry by user-facing name.

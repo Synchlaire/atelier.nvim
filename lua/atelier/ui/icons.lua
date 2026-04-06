@@ -10,6 +10,8 @@ M.nerd = {
   updating  = '',
   failed    = '',
   current   = '',
+  expanded  = '▾',
+  collapsed = '▸',
 }
 
 M.ascii = {
@@ -19,6 +21,8 @@ M.ascii = {
   updating  = '...',
   failed    = '[!]',
   current   = '*',
+  expanded  = '-',
+  collapsed = '+',
 }
 
 ---@param use_ascii boolean
