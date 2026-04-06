@@ -9,10 +9,11 @@
 --   footer with key hints
 --
 ---@class atelier.PickerRow
----@field kind 'header'|'filter'|'spec_header'|'theme'|'spacer'|'footer'
+---@field kind 'header'|'filter'|'spec_header'|'theme'|'spacer'|'footer'|'section'
 ---@field spec_name string|nil
 ---@field theme string|nil
 ---@field rt atelier.ThemeRuntime|nil
+---@field section 'dark'|'light'|'auto'|nil
 
 ---@class atelier.PickerView
 ---@field lines string[]
@@ -126,10 +127,36 @@ function M.render(state)
 
   push('', { kind = 'spacer' })
 
-  -- ── spec groups ───────────────────────────────────────────────────────
+  -- ── partition by declared background ──────────────────────────────────
+  -- Sections only appear when at least one spec has a declared background.
+  -- Otherwise the picker stays flat (no complexity tax for users who don't
+  -- opt into the feature).
+  local buckets = { dark = {}, light = {}, auto = {} }
+  local any_declared = false
   for _, sv in ipairs(spec_views) do
-    if not sv.visible then goto continue end
+    if sv.visible then
+      local bg = sv.rt.spec.background
+      if bg == 'dark' then
+        any_declared = true
+        buckets.dark[#buckets.dark + 1] = sv
+      elseif bg == 'light' then
+        any_declared = true
+        buckets.light[#buckets.light + 1] = sv
+      else
+        buckets.auto[#buckets.auto + 1] = sv
+      end
+    end
+  end
 
+  local SECTION_LABELS = {
+    dark  = '── Dark ──',
+    light = '── Light ──',
+    auto  = '── Auto ──',
+  }
+
+  -- ── spec groups ───────────────────────────────────────────────────────
+  ---@param sv table
+  local function render_spec_view(sv)
     local rt = sv.rt
     local expanded = rt.expanded or sv.force_expand
     local fold_icon = expanded and icons.expanded or icons.collapsed
@@ -186,8 +213,23 @@ function M.render(state)
       end
     end
 
-    ::continue::
   end
+
+  local function render_section(key)
+    local list = buckets[key]
+    if #list == 0 then return end
+    if any_declared then
+      push('  ' .. SECTION_LABELS[key], { kind = 'section', section = key })
+      hl('AtelierMuted', #lines, 0, -1)
+    end
+    for _, sv in ipairs(list) do
+      render_spec_view(sv)
+    end
+  end
+
+  render_section('dark')
+  render_section('light')
+  render_section('auto')
 
   push('', { kind = 'spacer' })
 
@@ -195,7 +237,7 @@ function M.render(state)
   if state.ui.mode == 'filter' then
     push("  type to filter   <CR> apply   <Esc> cancel", { kind = 'footer' })
   else
-    push("  <CR> select  <Tab> fold  / search  I install  U update  q quit",
+    push("  <CR> select  <Tab> fold  / search  B bg  I install  U update  q quit",
       { kind = 'footer' })
   end
   hl('AtelierMuted', #lines, 0, -1)

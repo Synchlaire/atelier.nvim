@@ -49,6 +49,10 @@ require('atelier').setup({
       except = {},                    -- blacklist
       before = function(name) end,    -- per-spec hook, runs before :colorscheme
       after  = function(name) end,    -- per-spec hook, runs after  :colorscheme
+      background = 'dark',            -- optional: 'dark' | 'light'. atelier sets vim.o.background before :colorscheme.
+      backgrounds = {                 -- optional per-variant override map; wins over `background`.
+        ['evergarden-fall'] = 'dark',
+      },
     },
     'default',                        -- built-ins work too
     '/abs/path/to/local/colorscheme', -- absolute paths are treated as local plugins
@@ -89,10 +93,15 @@ The picker groups themes by spec. Each group has a header (`▾`/`▸`) you can 
 | `/`                 | Inline filter — type to narrow live, `<Esc>` clears   |
 | `<C-/>`             | Hand off to `snacks.picker` (falls back to inline `/`) |
 | `q` / `<Esc>`       | Close (or clear filter if one is active)              |
+| `B`                 | Toggle `vim.o.background` between dark and light      |
 | `I` / `U` / `C`     | Install missing / update all / clean unused           |
 | `R`                 | Force redraw                                          |
 
 Filtering force-expands any spec whose name or variants match, so a search like `/dark` immediately surfaces every dark variant across every group.
+
+### Dark / light
+
+Atelier never guesses whether a colorscheme is dark or light. If you want it to know, declare it on the spec via `background = 'dark' | 'light'` (or per-variant via `backgrounds = { variant_name = 'dark' }`). When set, atelier writes `vim.o.background` before calling `:colorscheme`, so colorschemes that branch on `vim.o.background` get the right value at load time. As soon as *any* spec declares a background, the picker splits into `── Dark ──` / `── Light ──` / `── Auto ──` sections; until then it stays flat.
 
 ## Lua API
 

@@ -77,6 +77,16 @@ function M.attach(window, preview)
   map('<C-/>', snacks_open, 'atelier: snacks search')
   map('<C-_>', snacks_open, 'atelier: snacks search') -- terminal alias
 
+  -- Flip vim.o.background. Colorschemes that respond to it will adjust on
+  -- the next :colorscheme; we don't auto-reload because some colorschemes
+  -- only honor background at load time and re-loading the *current* theme
+  -- could undo a deliberate dark variant the user just picked. The picker
+  -- re-renders so the dark/light sections (if any) update.
+  map('B', function()
+    vim.o.background = (vim.o.background == 'dark') and 'light' or 'dark'
+    window:render()
+  end, 'atelier: toggle background')
+
   map('I', function() Manager.install_missing(window.state) end, 'atelier: install missing')
   map('U', function() Manager.update_all(window.state) end, 'atelier: update all')
   map('C', function() Manager.clean(window.state) end, 'atelier: clean unused')

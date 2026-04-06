@@ -5,6 +5,19 @@
 --
 local M = {}
 
+---Resolve the declared background for a (spec, variant) pair, or nil if the
+---user did not declare one. Per-variant `backgrounds[variant]` wins over the
+---spec-level `background`.
+---@param spec atelier.ThemeSpec
+---@param variant string
+---@return 'dark'|'light'|nil
+function M.declared_background(spec, variant)
+  if spec.backgrounds and spec.backgrounds[variant] then
+    return spec.backgrounds[variant]
+  end
+  return spec.background
+end
+
 ---@param spec atelier.ThemeSpec
 ---@param theme string|nil  Specific theme name to load (e.g. 'tokyonight-night'). nil = use spec.name.
 ---@param on_load fun(name: string)|nil  Global on_load hook from config.
@@ -17,6 +30,14 @@ function M.load(spec, theme, on_load)
     if not ok then
       return false, 'before hook failed: ' .. tostring(err)
     end
+  end
+
+  -- If the user declared a background for this variant, apply it BEFORE
+  -- :colorscheme so the colorscheme can react to vim.o.background in its
+  -- own setup. Colorschemes that don't care will just ignore it.
+  local declared = M.declared_background(spec, target)
+  if declared then
+    vim.o.background = declared
   end
 
   local ok, err = pcall(vim.cmd.colorscheme, target)

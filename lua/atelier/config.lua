@@ -12,6 +12,8 @@
 ---@field after  fun(name: string)|nil  Per-spec hook fired after :colorscheme.
 ---@field local_path string|nil         If the spec is an absolute path, the path itself; manager skips git for these.
 ---@field builtin boolean               True if this is a Neovim built-in colorscheme (no install needed).
+---@field background 'dark'|'light'|nil Optional declaration of which `:set background` value this spec expects. When set, the loader applies it before `:colorscheme`. Purely user-declared — atelier never guesses.
+---@field backgrounds table<string, 'dark'|'light'>|nil  Per-variant override map keyed by variant name. Wins over `background` for the matched variant.
 
 ---@class atelier.Config
 ---@field themes atelier.ThemeSpec[]
@@ -115,6 +117,27 @@ local function normalize_one(raw)
     end
   end
 
+  -- Validate background declarations early so a typo blows up at setup()
+  -- rather than silently doing nothing at load time.
+  local background = extra.background
+  if background ~= nil and background ~= 'dark' and background ~= 'light' then
+    error("[atelier] background must be 'dark' or 'light', got " .. tostring(background))
+  end
+  local backgrounds
+  if extra.backgrounds ~= nil then
+    if type(extra.backgrounds) ~= 'table' then
+      error('[atelier] backgrounds must be a table mapping variant -> "dark"|"light"')
+    end
+    backgrounds = {}
+    for variant, mode in pairs(extra.backgrounds) do
+      if mode ~= 'dark' and mode ~= 'light' then
+        error(("[atelier] backgrounds[%s] must be 'dark' or 'light', got %s"):format(
+          tostring(variant), tostring(mode)))
+      end
+      backgrounds[variant] = mode
+    end
+  end
+
   local spec = {
     name = name,
     source = source,
@@ -126,6 +149,8 @@ local function normalize_one(raw)
     builtin = false,
     local_path = nil,
     url = nil,
+    background = background,
+    backgrounds = backgrounds,
   }
 
   if BUILTINS[source] then
