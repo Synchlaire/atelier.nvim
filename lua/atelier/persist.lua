@@ -1,7 +1,8 @@
 -- Read/write a tiny JSON file recording the last loaded theme. All I/O goes
 -- through vim.uv so the main loop never blocks. The persisted shape is:
---   { spec_name = "tokyonight", theme = "tokyonight-night" }
--- Anything unrecognized is silently dropped on read.
+--   { spec_name = "tokyonight", theme = "tokyonight-night", background = "dark" }
+-- `background` is optional and only present when the user declared one or
+-- toggled via `B`. Anything unrecognized is silently dropped on read.
 --
 local M = {}
 
@@ -32,9 +33,12 @@ function M.read(data_dir)
   if not ok or type(decoded) ~= 'table' then
     return { spec_name = nil, theme = nil }
   end
+  local bg = decoded.background
+  if bg ~= 'dark' and bg ~= 'light' then bg = nil end
   return {
     spec_name = type(decoded.spec_name) == 'string' and decoded.spec_name or nil,
     theme = type(decoded.theme) == 'string' and decoded.theme or nil,
+    background = bg,
   }
 end
 
@@ -45,6 +49,7 @@ function M.write(data_dir, current)
   local payload = vim.json.encode({
     spec_name = current.spec_name,
     theme = current.theme,
+    background = current.background,
   })
   -- Atomic-ish: write to a temp then rename so a crash mid-write can't leave
   -- a half-written state.json behind.

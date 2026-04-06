@@ -13,6 +13,7 @@ local M = {}
 ---@class atelier.Preview
 ---@field state atelier.State
 ---@field snapshot string|nil       :colorscheme value at picker-open time.
+---@field snapshot_background 'dark'|'light'  vim.o.background at picker-open time.
 ---@field pending integer|nil       defer_fn timer id.
 ---@field committed boolean         True once the user pressed <CR>.
 ---@field current_row_key string|nil  spec_name|theme of the row currently shown.
@@ -25,6 +26,7 @@ function M.new(state)
   local self = setmetatable({
     state = state,
     snapshot = vim.g.colors_name,
+    snapshot_background = vim.o.background,
     pending = nil,
     committed = false,
     current_row_key = nil,
@@ -78,8 +80,17 @@ function Preview:commit(row)
     return false
   end
 
-  self.state.current = { spec_name = row.spec_name, theme = row.theme }
-  self.state.last_good = { spec_name = row.spec_name, theme = row.theme }
+  -- Capture vim.o.background only when something declared an opinion —
+  -- either the spec or a prior `B` toggle that changed it away from the
+  -- snapshot. nil means "atelier had no opinion, leave it alone".
+  local bg = nil
+  if Loader.declared_background(row.rt.spec, row.theme)
+    or vim.o.background ~= self.snapshot_background then
+    bg = vim.o.background
+  end
+
+  self.state.current = { spec_name = row.spec_name, theme = row.theme, background = bg }
+  self.state.last_good = { spec_name = row.spec_name, theme = row.theme, background = bg }
   self.committed = true
   if self.state.config.persist then
     require('atelier.persist').write(self.state.config.data_dir, self.state.current)
@@ -94,8 +105,15 @@ function Preview:cleanup()
     pcall(vim.fn.timer_stop, self.pending)
     self.pending = nil
   end
-  if not self.committed and self.snapshot and self.snapshot ~= vim.g.colors_name then
-    pcall(vim.cmd.colorscheme, self.snapshot)
+  if not self.committed then
+    -- Restore background BEFORE the colorscheme so colorschemes that
+    -- branch on it pick up the original mode at load time.
+    if vim.o.background ~= self.snapshot_background then
+      vim.o.background = self.snapshot_background
+    end
+    if self.snapshot and self.snapshot ~= vim.g.colors_name then
+      pcall(vim.cmd.colorscheme, self.snapshot)
+    end
   end
 end
 

@@ -28,6 +28,13 @@ function M.setup(user)
       if not persisted.spec_name then return end
       local rt = state.by_name[persisted.spec_name]
       if rt and rt.status == 'installed' then
+        -- Restore the persisted background BEFORE Loader.load runs. The
+        -- loader will overwrite it if the spec declares a background for
+        -- this variant; otherwise the persisted value (e.g. from a `B`
+        -- toggle the user committed) survives.
+        if persisted.background then
+          vim.o.background = persisted.background
+        end
         local Loader = require('atelier.loader')
         local ok = Loader.load(rt.spec, persisted.theme, config.on_load)
         if ok then

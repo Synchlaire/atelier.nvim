@@ -39,8 +39,15 @@ function M.load(spec_name, theme)
   local target = theme or rt.spec.name
   local ok, err = Loader.load(rt.spec, target, s.config.on_load)
   if ok then
-    s.current = { spec_name = spec_name, theme = target }
-    s.last_good = { spec_name = spec_name, theme = target }
+    -- Snapshot vim.o.background AFTER load: this captures both the
+    -- declared background (loader sets it) and any prior `B` toggle the
+    -- user committed via `<CR>`, while still recording nil for specs
+    -- that don't care.
+    local bg = nil
+    local declared = Loader.declared_background(rt.spec, target)
+    if declared then bg = vim.o.background end
+    s.current = { spec_name = spec_name, theme = target, background = bg }
+    s.last_good = { spec_name = spec_name, theme = target, background = bg }
     if s.config.persist then
       require('atelier.persist').write(s.config.data_dir, s.current)
     end

@@ -172,6 +172,30 @@ function Window:current_row()
   return self.rows[lnum]
 end
 
+---Move the cursor by `delta` lines, skipping rows the user can't act on
+---(spacers, headers, footers, filter input). Section headers ARE
+---selectable because <CR> on them toggles the bucket.
+---@param delta integer  +1 for j, -1 for k
+function Window:move_by(delta)
+  if not vim.api.nvim_win_is_valid(self.win) then return end
+  local function selectable(row)
+    if not row then return false end
+    return row.kind == 'theme' or row.kind == 'spec_header' or row.kind == 'section'
+  end
+
+  local lnum = vim.api.nvim_win_get_cursor(self.win)[1]
+  local n = #self.rows
+  local i = lnum + delta
+  while i >= 1 and i <= n do
+    if selectable(self.rows[i]) then
+      pcall(vim.api.nvim_win_set_cursor, self.win, { i, 2 })
+      return
+    end
+    i = i + delta
+  end
+  -- No selectable row in that direction; leave cursor where it is.
+end
+
 function Window:close()
   if vim.api.nvim_win_is_valid(self.win) then
     vim.api.nvim_win_close(self.win, true)

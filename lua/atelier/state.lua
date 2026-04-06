@@ -14,6 +14,7 @@
 ---@class atelier.Current
 ---@field spec_name string|nil   Name of the spec that owns the active theme.
 ---@field theme string|nil       The actual `:colorscheme` value.
+---@field background 'dark'|'light'|nil  The `vim.o.background` value at the time the theme was committed. nil if the user never declared one for this variant.
 
 ---@class atelier.UiState
 ---@field filter string                  Current filter query (lowercased). Empty = no filter.
@@ -41,8 +42,8 @@ function M.new(config)
     bus = Bus.new(),
     themes = {},
     by_name = {},
-    current = { spec_name = nil, theme = nil },
-    last_good = { spec_name = nil, theme = nil },
+    current = { spec_name = nil, theme = nil, background = nil },
+    last_good = { spec_name = nil, theme = nil, background = nil },
     ui = {
       filter = '',
       mode = 'normal',

@@ -265,4 +265,50 @@ function M.set_all_folds(state, expanded)
   state.bus:emit('state_changed')
 end
 
+---Toggle every spec inside a section (Dark/Light/Auto). If any spec in
+---the bucket is collapsed, expand all of them; otherwise collapse all.
+---@param state atelier.State
+---@param section 'dark'|'light'|'auto'
+function M.toggle_section(state, section)
+  local function bucket_of(rt)
+    if rt.spec.background == 'dark' then return 'dark' end
+    if rt.spec.background == 'light' then return 'light' end
+    return 'auto'
+  end
+
+  local in_bucket = {}
+  local any_collapsed = false
+  for _, rt in ipairs(state.themes) do
+    if bucket_of(rt) == section then
+      in_bucket[#in_bucket + 1] = rt
+      if not rt.expanded then any_collapsed = true end
+    end
+  end
+  if #in_bucket == 0 then return end
+
+  local target = any_collapsed -- expand all if any are collapsed; else collapse all
+  for _, rt in ipairs(in_bucket) do
+    rt.expanded = target
+  end
+  state.bus:emit('state_changed')
+end
+
+---Find a variant of `spec` that the user has explicitly declared as having
+---background `mode`. Returns the variant name or nil. Used by the `B`
+---toggle to switch to a paired light/dark variant when one is available.
+---@param spec atelier.ThemeSpec
+---@param mode 'dark'|'light'
+---@return string|nil
+function M.find_variant_for(spec, mode)
+  if spec.backgrounds then
+    for variant, m in pairs(spec.backgrounds) do
+      if m == mode then return variant end
+    end
+  end
+  if spec.background == mode then
+    return spec.name
+  end
+  return nil
+end
+
 return M

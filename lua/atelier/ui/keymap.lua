@@ -26,10 +26,17 @@ function M.attach(window, preview)
     end
   end, 'atelier: close / clear filter')
 
-  -- <CR> on a theme commits & closes; on a spec header it toggles the fold.
+  -- <CR>:
+  --   theme         -> commit & close
+  --   spec_header   -> toggle that spec's fold
+  --   section       -> toggle every spec in that bucket
   map('<CR>', function()
     local row = window:current_row()
     if not row then return end
+    if row.kind == 'section' and row.section then
+      Picker.toggle_section(window.state, row.section)
+      return
+    end
     if row.kind == 'spec_header' and row.spec_name then
       Picker.toggle_fold(window.state, row.spec_name)
       return
@@ -37,7 +44,14 @@ function M.attach(window, preview)
     if preview:commit(row) then
       window:close()
     end
-  end, 'atelier: select / toggle fold')
+  end, 'atelier: select / toggle fold or section')
+
+  -- j/k (and arrow keys) skip non-selectable rows so the cursor never
+  -- lands on a spacer, the title, or the footer.
+  map('j', function() window:move_by(1) end, 'atelier: next selectable')
+  map('k', function() window:move_by(-1) end, 'atelier: prev selectable')
+  map('<Down>', function() window:move_by(1) end, 'atelier: next selectable')
+  map('<Up>', function() window:move_by(-1) end, 'atelier: prev selectable')
 
   -- Tab also toggles the fold under the cursor; works on either a header
   -- row or a variant row inside a group.
@@ -77,13 +91,28 @@ function M.attach(window, preview)
   map('<C-/>', snacks_open, 'atelier: snacks search')
   map('<C-_>', snacks_open, 'atelier: snacks search') -- terminal alias
 
-  -- Flip vim.o.background. Colorschemes that respond to it will adjust on
-  -- the next :colorscheme; we don't auto-reload because some colorschemes
-  -- only honor background at load time and re-loading the *current* theme
-  -- could undo a deliberate dark variant the user just picked. The picker
-  -- re-renders so the dark/light sections (if any) update.
+  -- Flip background mode. If the current spec has a variant declared in
+  -- the *target* mode (via `background` or `backgrounds = {...}`), switch
+  -- to it — that's the only safe way to avoid leaving a dark colorscheme
+  -- on a light background. Otherwise just flip vim.o.background and let
+  -- the user pick from the now-sorted Light/Dark sections.
   map('B', function()
-    vim.o.background = (vim.o.background == 'dark') and 'light' or 'dark'
+    local s = window.state
+    local target_mode = (vim.o.background == 'dark') and 'light' or 'dark'
+
+    if s.current.spec_name then
+      local rt = s.by_name[s.current.spec_name]
+      if rt then
+        local variant = Picker.find_variant_for(rt.spec, target_mode)
+        if variant then
+          require('atelier.api').load(s.current.spec_name, variant)
+          window:render()
+          return
+        end
+      end
+    end
+
+    vim.o.background = target_mode
     window:render()
   end, 'atelier: toggle background')
 
