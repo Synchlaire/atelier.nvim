@@ -18,7 +18,11 @@ function M.open(state)
   local window = Window.open(state)
   local preview = Preview.new(state)
 
-  window.on_cursor = function(row) preview:on_cursor(row) end
+  -- Cursor movement no longer auto-previews (the user hits <Space> to
+  -- preview explicitly). The info row below the list still re-renders
+  -- on cursor move — that's handled inside window:render() via the
+  -- hovered_row lookup.
+  window.on_cursor = function(row) window:refresh_info(row) end
   window.on_close = function() preview:cleanup() end
 
   Keymap.attach(window, preview)

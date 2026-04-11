@@ -27,7 +27,7 @@ function M.attach(window, preview)
   end, 'atelier: close / clear filter')
 
   -- <CR>:
-  --   theme         -> commit & close
+  --   theme         -> commit & close (persists)
   --   spec_header   -> toggle that spec's fold (optional density control)
   map('<CR>', function()
     local row = window:current_row()
@@ -39,7 +39,15 @@ function M.attach(window, preview)
     if preview:commit(row) then
       window:close()
     end
-  end, 'atelier: select / toggle fold')
+  end, 'atelier: set & exit / toggle fold')
+
+  -- <Space>: preview the theme under the cursor without committing.
+  -- Loads :colorscheme immediately so the preview pane reflects it.
+  -- Closing the picker without <CR> restores the snapshot.
+  map('<Space>', function()
+    local row = window:current_row()
+    if row then preview:preview_now(row) end
+  end, 'atelier: preview under cursor')
 
   -- j/k (and arrow keys) skip non-selectable rows so the cursor never
   -- lands on a spacer, the title, or the footer.
@@ -91,7 +99,7 @@ function M.attach(window, preview)
   -- to it — that's the only safe way to avoid leaving a dark colorscheme
   -- on a light background. Otherwise just flip vim.o.background and let
   -- the user pick from the now-sorted Light/Dark sections.
-  map('B', function()
+  local function toggle_background()
     local s = window.state
     local target_mode = (vim.o.background == 'dark') and 'light' or 'dark'
 
@@ -109,7 +117,9 @@ function M.attach(window, preview)
 
     vim.o.background = target_mode
     window:render()
-  end, 'atelier: toggle background')
+  end
+  map('B', toggle_background, 'atelier: toggle background')
+  map('t', toggle_background, 'atelier: toggle background (alias)')
 
   map('I', function() Manager.install_missing(window.state) end, 'atelier: install missing')
   map('U', function() Manager.update_all(window.state) end, 'atelier: update all')

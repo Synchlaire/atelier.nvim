@@ -75,8 +75,9 @@ end
 
 ---@param state atelier.State
 ---@param width integer  Window inner width (columns available for content).
+---@param hovered atelier.PickerRow|nil  Row under the cursor, for the info strip.
 ---@return atelier.PickerView
-function M.render(state, width)
+function M.render(state, width, hovered)
   local lines = {}
   local highlights = {}
   local rows = {}
@@ -274,6 +275,50 @@ function M.render(state, width)
     end
   end
 
+  -- ── info row ─────────────────────────────────────────────────────────
+  -- Shows metadata for the hovered theme row. Always present so the
+  -- footer's vertical position is stable.
+  push(rule_line(), { kind = 'rule' })
+  hl('AtelierDivider', #lines, 2, -1)
+
+  local info_line = '  '
+  if hovered and hovered.kind == 'theme' and hovered.rt then
+    local bg = M.background_of(hovered.rt.spec, hovered.theme)
+    local bg_part = bg and (' ' .. icons.sep .. ' ' .. bg) or ''
+    local status = hovered.rt.status
+    local status_part = (status and status ~= 'installed' and status ~= 'unknown')
+      and (' ' .. icons.sep .. ' ' .. status) or ''
+    local source = hovered.rt.spec.url or hovered.rt.spec.name
+    -- Shorten github URLs to owner/repo for density.
+    local short = source:match('github%.com[/:]([^/]+/[^/]+)$')
+      or source:match('github%.com[/:]([^/]+/[^/]+)%.git$')
+      or source
+    short = short:gsub('%.git$', '')
+    local left = hovered.theme .. bg_part .. status_part
+    local right = short
+    local pad = width - 2 - vim.fn.strdisplaywidth(left) - vim.fn.strdisplaywidth(right) - 2
+    if pad < 1 then
+      -- Not enough room; drop the source on the right.
+      info_line = '  ' .. left
+    else
+      info_line = '  ' .. left .. string.rep(' ', pad) .. right
+    end
+  elseif hovered and hovered.kind == 'spec_header' and hovered.rt then
+    local spec = hovered.rt.spec
+    local count = #(hovered.rt.themes or {})
+    local source = spec.url or spec.name
+    local short = source:match('github%.com[/:]([^/]+/[^/]+)$') or source
+    short = short:gsub('%.git$', '')
+    info_line = ('  %s %s %d variants %s %s'):format(spec.name, icons.sep, count, icons.sep, short)
+  end
+  push(info_line, { kind = 'info' })
+  local info_idx = #lines
+  hl('AtelierSubtle', info_idx, 0, -1)
+  if hovered and hovered.kind == 'theme' then
+    -- Brighten just the theme name at the start of the info line.
+    hl('AtelierTheme', info_idx, 2, 2 + #hovered.theme)
+  end
+
   -- ── footer ────────────────────────────────────────────────────────────
   push(rule_line(), { kind = 'rule' })
   hl('AtelierDivider', #lines, 2, -1)
@@ -283,14 +328,13 @@ function M.render(state, width)
     footer_line = '  type to filter ' .. icons.sep .. ' <CR> apply ' .. icons.sep .. ' <Esc> cancel'
     keycaps = { '<CR>', '<Esc>' }
   else
-    footer_line = '  <CR> select ' .. icons.sep .. ' / filter ' .. icons.sep
-      .. ' B bg ' .. icons.sep .. ' I U C ' .. icons.sep .. ' q'
-    keycaps = { '<CR>', '/', 'B', 'I', 'U', 'C', 'q' }
+    footer_line = '  <Space> preview ' .. icons.sep .. ' <CR> set ' .. icons.sep
+      .. ' / filter ' .. icons.sep .. ' t bg ' .. icons.sep .. ' I U C ' .. icons.sep .. ' q'
+    keycaps = { '<Space>', '<CR>', '/', 't', 'I', 'U', 'C', 'q' }
   end
   push(footer_line, { kind = 'footer' })
   local footer_idx = #lines
   hl('AtelierSubtle', footer_idx, 0, -1)
-  -- Overlay keycap highlights on the subtle base.
   local cursor_col = 2
   for _, cap in ipairs(keycaps) do
     local pos = footer_line:find(cap, cursor_col + 1, true)

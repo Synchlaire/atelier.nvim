@@ -1,12 +1,11 @@
--- Debounced hover preview with restore-on-cancel.
+-- On-demand preview with restore-on-cancel.
 --
--- Snapshots the user's current colorscheme when the picker opens. Hovering
--- a theme schedules a deferred :colorscheme; if the cursor moves again
--- before the delay fires, the scheduled load is cancelled. Closing the
--- picker without committing restores the snapshot.
+-- Snapshots the user's current colorscheme when the picker opens. The
+-- cursor no longer auto-previews on move — the user explicitly hits
+-- <Space> to load the theme under the cursor, and <CR> to commit.
+-- Closing the picker without committing restores the snapshot.
 --
 local Loader = require('atelier.loader')
-local Manager = require('atelier.manager')
 
 local M = {}
 
@@ -14,9 +13,8 @@ local M = {}
 ---@field state atelier.State
 ---@field snapshot string|nil       :colorscheme value at picker-open time.
 ---@field snapshot_background 'dark'|'light'  vim.o.background at picker-open time.
----@field pending integer|nil       defer_fn timer id.
 ---@field committed boolean         True once the user pressed <CR>.
----@field current_row_key string|nil  spec_name|theme of the row currently shown.
+---@field previewed_key string|nil  spec_name|theme of the last previewed row.
 local Preview = {}
 Preview.__index = Preview
 
@@ -27,36 +25,26 @@ function M.new(state)
     state = state,
     snapshot = vim.g.colors_name,
     snapshot_background = vim.o.background,
-    pending = nil,
     committed = false,
-    current_row_key = nil,
+    previewed_key = nil,
   }, Preview)
   return self
 end
 
+---Synchronously load the theme under the cursor as a preview. No debounce,
+---no on_load hook. Called from the <Space> keybind.
 ---@param row atelier.PickerRow|nil
-function Preview:on_cursor(row)
-  if not row or row.kind ~= 'theme' or not row.rt then return end
-  if row.rt.status ~= 'installed' then return end
+---@return boolean
+function Preview:preview_now(row)
+  if not row or row.kind ~= 'theme' or not row.rt then return false end
+  if row.rt.status ~= 'installed' then return false end
 
   local key = row.spec_name .. '|' .. row.theme
-  if key == self.current_row_key then return end
-  self.current_row_key = key
+  if key == self.previewed_key then return false end
+  self.previewed_key = key
 
-  if self.pending then
-    pcall(vim.fn.timer_stop, self.pending)
-    self.pending = nil
-  end
-
-  local delay = self.state.config.preview_delay_ms
-  local spec_name, theme = row.spec_name, row.theme
-  self.pending = vim.fn.timer_start(delay, function()
-    self.pending = nil
-    local rt = self.state.by_name[spec_name]
-    if not rt then return end
-    -- Don't run on_load during preview — it's not a commit.
-    Loader.load(rt.spec, theme, nil)
-  end)
+  local ok = Loader.load(row.rt.spec, row.theme, nil)
+  return ok
 end
 
 ---Commit the currently-previewed theme as the active one. Persists.
@@ -67,11 +55,6 @@ function Preview:commit(row)
   if row.rt.status ~= 'installed' then
     vim.notify('[atelier] theme not installed: ' .. row.theme, vim.log.levels.WARN)
     return false
-  end
-
-  if self.pending then
-    pcall(vim.fn.timer_stop, self.pending)
-    self.pending = nil
   end
 
   local ok, err = Loader.load(row.rt.spec, row.theme, self.state.config.on_load)
@@ -101,10 +84,6 @@ end
 
 ---Restore the snapshot if nothing was committed. Called from on_close.
 function Preview:cleanup()
-  if self.pending then
-    pcall(vim.fn.timer_stop, self.pending)
-    self.pending = nil
-  end
   if not self.committed then
     -- Restore background BEFORE the colorscheme so colorschemes that
     -- branch on it pick up the original mode at load time.
