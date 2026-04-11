@@ -1,19 +1,24 @@
--- Pure render: takes a State and returns lines + highlight ranges + a
--- row->target lookup table. No buffer access. Trivially testable.
+-- Pure render: takes a State (+ window inner width) and returns lines,
+-- highlight ranges, and a row→target lookup table. No buffer access.
+-- Trivially testable.
 --
--- Layout (top → bottom):
---   atelier title
---   filter input row (only when state.ui.mode == 'filter' or filter ~= '')
---   spec headers (▾/▸ + name + status badge + variant count)
---     variant rows under each expanded spec
---   footer with key hints
+-- Wing OS layout (top → bottom):
+--   ATELIER · N themes                               (header)
+--   ─────────────────────────────────────            (rule, full width)
+--   /needle█                                         (filter slot; reserved)
+--   WING ─────────────────────────────── installing  (spec group header + optional status)
+--   • wing-dark                          ·  dark     (variant rows)
+--     wing-light                         · light
+--   KANAGAWA ────────────────────────────            (next group)
+--     kanagawa-wave                      ·  dark
+--   ─────────────────────────────────────            (footer rule)
+--   <CR> select · / filter · B bg · I U C · q        (footer hints)
 --
 ---@class atelier.PickerRow
----@field kind 'header'|'filter'|'spec_header'|'theme'|'spacer'|'footer'|'section'
+---@field kind 'header'|'rule'|'filter'|'spec_header'|'theme'|'error'|'footer'|'spacer'
 ---@field spec_name string|nil
 ---@field theme string|nil
 ---@field rt atelier.ThemeRuntime|nil
----@field section 'dark'|'light'|'auto'|nil
 
 ---@class atelier.PickerView
 ---@field lines string[]
@@ -27,15 +32,15 @@ local M = {}
 
 local STATUS_GROUP = {
   installed  = 'AtelierStatusOk',
-  missing    = 'AtelierMuted',
+  missing    = 'AtelierStatusMissing',
   installing = 'AtelierStatusBusy',
   updating   = 'AtelierStatusBusy',
   failed     = 'AtelierStatusErr',
-  unknown    = 'AtelierMuted',
+  unknown    = 'AtelierSubtle',
 }
 
 local STATUS_LABEL = {
-  installed  = 'installed',
+  installed  = '',        -- normal case: no badge, rule extends to edge
   missing    = 'missing',
   installing = 'installing',
   updating   = 'updating',
@@ -51,14 +56,33 @@ local function matches(needle, haystack)
   return haystack:lower():find(needle, 1, true) ~= nil
 end
 
+---Given a variant name, return the declared background mode (if any).
+---Checks `spec.backgrounds[variant]` first, then falls back to
+---`spec.background`. Returns nil when the user hasn't declared one.
+---@param spec atelier.ThemeSpec
+---@param variant string
+---@return 'dark'|'light'|nil
+function M.background_of(spec, variant)
+  if spec.backgrounds then
+    local b = spec.backgrounds[variant]
+    if b == 'dark' or b == 'light' then return b end
+  end
+  if spec.background == 'dark' or spec.background == 'light' then
+    return spec.background
+  end
+  return nil
+end
+
 ---@param state atelier.State
+---@param width integer  Window inner width (columns available for content).
 ---@return atelier.PickerView
-function M.render(state)
+function M.render(state, width)
   local lines = {}
   local highlights = {}
   local rows = {}
   local icons = Icons.active
   local filter = state.ui.filter
+  width = width or 72
 
   local function push(line, row)
     lines[#lines + 1] = line
@@ -74,173 +98,207 @@ function M.render(state)
     }
   end
 
-  -- ── header ────────────────────────────────────────────────────────────
-  push('  atelier', { kind = 'header' })
-  hl('AtelierTitle', #lines, 2, 9)
+  local function rule_line()
+    -- Full-width rule with 2-col left/right margin.
+    return '  ' .. string.rep(icons.divider, math.max(0, width - 4))
+  end
 
+  -- ── header ────────────────────────────────────────────────────────────
+  -- Pre-compute visible/total counts so the header line is accurate.
   local total_variants = 0
   local visible_variants = 0
-  local spec_views = {} -- precomputed: { rt, variants_visible, force_expand }
+  local spec_views = {}
 
   for _, rt in ipairs(state.themes) do
     local variants = Manager.discover(state, rt)
     local theme_list = (#variants > 0) and variants or { rt.spec.name }
     total_variants = total_variants + #theme_list
 
-    local matching_variants = {}
+    local matching = {}
     if filter == '' then
-      matching_variants = theme_list
+      matching = theme_list
     else
       local spec_matches = matches(filter, rt.spec.name)
       for _, t in ipairs(theme_list) do
         if spec_matches or matches(filter, t) then
-          matching_variants[#matching_variants + 1] = t
+          matching[#matching + 1] = t
         end
       end
     end
 
-    visible_variants = visible_variants + #matching_variants
+    visible_variants = visible_variants + #matching
     spec_views[#spec_views + 1] = {
       rt = rt,
-      variants = matching_variants,
-      -- When the user is filtering, force open any spec that has matches.
-      force_expand = filter ~= '' and #matching_variants > 0,
-      -- Hide specs that have zero matching variants when filtering.
-      visible = filter == '' or #matching_variants > 0,
+      variants = matching,
+      visible = filter == '' or #matching > 0,
     }
   end
 
+  -- Line 1: ATELIER · N themes
+  local title = 'ATELIER'
+  local count_text
   if filter ~= '' then
-    push(('  %d/%d themes  ·  filter: %s'):format(visible_variants, total_variants, filter),
-      { kind = 'header' })
+    count_text = (' %s %d/%d themes'):format(icons.sep, visible_variants, total_variants)
   else
-    push(('  %d themes'):format(total_variants), { kind = 'header' })
+    count_text = (' %s %d themes'):format(icons.sep, total_variants)
   end
-  hl('AtelierMuted', #lines, 0, -1)
+  push('  ' .. title .. count_text, { kind = 'header' })
+  hl('AtelierTitle', #lines, 2, 2 + #title)
+  hl('AtelierSubtle', #lines, 2 + #title, -1)
 
-  -- ── filter input row ──────────────────────────────────────────────────
-  if state.ui.mode == 'filter' then
-    push('  /' .. filter .. '█', { kind = 'filter' })
-    hl('AtelierKey', #lines, 2, 3)
-    hl('AtelierItem', #lines, 3, -1)
-  end
+  -- Line 2: top rule
+  push(rule_line(), { kind = 'rule' })
+  hl('AtelierDivider', #lines, 2, -1)
 
-  push('', { kind = 'spacer' })
-
-  -- ── partition by declared background ──────────────────────────────────
-  -- Sections only appear when at least one spec has a declared background.
-  -- Otherwise the picker stays flat (no complexity tax for users who don't
-  -- opt into the feature).
-  local buckets = { dark = {}, light = {}, auto = {} }
-  local any_declared = false
-  for _, sv in ipairs(spec_views) do
-    if sv.visible then
-      local bg = sv.rt.spec.background
-      if bg == 'dark' then
-        any_declared = true
-        buckets.dark[#buckets.dark + 1] = sv
-      elseif bg == 'light' then
-        any_declared = true
-        buckets.light[#buckets.light + 1] = sv
-      else
-        buckets.auto[#buckets.auto + 1] = sv
-      end
+  -- Line 3: reserved filter slot (always present, empty when not filtering).
+  -- Reserving the slot prevents vertical reflow when toggling filter mode.
+  if state.ui.mode == 'filter' or filter ~= '' then
+    local prompt = '  /'
+    local needle = filter
+    local cursor = state.ui.mode == 'filter' and '█' or ''
+    push(prompt .. needle .. cursor, { kind = 'filter' })
+    hl('AtelierFilterPrompt', #lines, 2, 3)
+    if #needle > 0 then
+      hl('AtelierTheme', #lines, 3, 3 + #needle)
     end
+    if cursor ~= '' then
+      hl('AtelierFilterCursor', #lines, 3 + #needle, -1)
+    end
+  else
+    push('', { kind = 'spacer' })
   end
-
-  local SECTION_LABELS = {
-    dark  = '── Dark ──',
-    light = '── Light ──',
-    auto  = '── Auto ──',
-  }
 
   -- ── spec groups ───────────────────────────────────────────────────────
-  ---@param sv table
-  local function render_spec_view(sv)
-    local rt = sv.rt
-    local expanded = rt.expanded or sv.force_expand
-    local fold_icon = expanded and icons.expanded or icons.collapsed
-    local status_label = STATUS_LABEL[rt.status] or ''
-    local count = #sv.variants
-    local count_str = filter ~= '' and ('(%d/%d)'):format(count, #(rt.themes or { rt.spec.name }))
-      or ('(%d)'):format(count)
+  for _, sv in ipairs(spec_views) do
+    if sv.visible then
+      local rt = sv.rt
+      local expanded = rt.expanded
+      if expanded == nil then expanded = true end
+      -- Force expand while filtering (so matches are visible).
+      if filter ~= '' and #sv.variants > 0 then expanded = true end
 
-    -- Header line: "▾ wing                            installed (3)"
-    local header_line = ('  %s %s'):format(fold_icon, rt.spec.name)
-    -- Pad to a consistent column for the status badge.
-    local pad_to = 36
-    if #header_line < pad_to then
-      header_line = header_line .. string.rep(' ', pad_to - #header_line)
-    else
-      header_line = header_line .. ' '
-    end
-    header_line = header_line .. status_label .. ' ' .. count_str
-    if rt.status == 'failed' and rt.error then
-      header_line = header_line .. '  ' .. rt.error
-    end
+      -- Spec header: "  WING ─────────────────────  installing"
+      local name_upper = rt.spec.name:upper()
+      local status_label = STATUS_LABEL[rt.status] or ''
+      local hidden_tag = ''
+      if not expanded then
+        local count = #sv.variants
+        hidden_tag = ('(%d hidden)'):format(count)
+      end
 
-    push(header_line, { kind = 'spec_header', spec_name = rt.spec.name, rt = rt })
+      local label_part = '  ' .. name_upper .. ' '
+      local right_part
+      if status_label ~= '' and hidden_tag ~= '' then
+        right_part = ' ' .. hidden_tag .. '  ' .. status_label
+      elseif status_label ~= '' then
+        right_part = ' ' .. status_label
+      elseif hidden_tag ~= '' then
+        right_part = ' ' .. hidden_tag
+      else
+        right_part = ''
+      end
 
-    local line_idx = #lines
-    hl('AtelierKey', line_idx, 2, 2 + #fold_icon)
-    hl('AtelierItem', line_idx, 2 + #fold_icon + 1, 2 + #fold_icon + 1 + #rt.spec.name)
-    if status_label ~= '' then
-      local badge_start = math.max(pad_to, 2 + #fold_icon + 1 + #rt.spec.name + 1)
-      hl(STATUS_GROUP[rt.status] or 'AtelierMuted', line_idx, badge_start, badge_start + #status_label)
-    end
-    if rt.status == 'failed' and rt.error then
-      hl('AtelierStatusErr', line_idx, #header_line - #rt.error, -1)
-    end
+      -- Fill rule between label and right-side annotation.
+      local fill_cols = width - 2 - #name_upper - 1 - #right_part - 2
+      if fill_cols < 1 then fill_cols = 1 end
+      local fill = string.rep(icons.divider, fill_cols)
+      local header_line = label_part .. fill .. right_part
 
-    -- Variant rows (only if expanded)
-    if expanded then
-      for _, theme in ipairs(sv.variants) do
-        local is_current = (state.current.spec_name == rt.spec.name)
-          and (state.current.theme == theme)
-        local marker = is_current and icons.current or ' '
-        local prefix = '      ' .. marker .. ' '
-        local line = prefix .. theme
+      push(header_line, { kind = 'spec_header', spec_name = rt.spec.name, rt = rt })
+      local line_idx = #lines
 
-        push(line, { kind = 'theme', spec_name = rt.spec.name, theme = theme, rt = rt })
+      hl('AtelierSpecHeader', line_idx, 2, 2 + #name_upper)
+      local fill_start = 2 + #name_upper + 1
+      hl('AtelierDivider', line_idx, fill_start, fill_start + #fill)
+      if right_part ~= '' then
+        local right_start = fill_start + #fill
+        if hidden_tag ~= '' then
+          local hidden_pos = header_line:find(hidden_tag, right_start, true)
+          if hidden_pos then
+            hl('AtelierSubtle', line_idx, hidden_pos - 1, hidden_pos - 1 + #hidden_tag)
+          end
+        end
+        if status_label ~= '' then
+          local badge_pos = header_line:find(status_label, right_start, true)
+          if badge_pos then
+            hl(STATUS_GROUP[rt.status] or 'AtelierSubtle',
+               line_idx, badge_pos - 1, badge_pos - 1 + #status_label)
+          end
+        end
+      end
 
-        local idx = #lines
-        if is_current then
-          hl('AtelierCurrent', idx, 6, 6 + #marker)
-          hl('AtelierCurrent', idx, #prefix, #prefix + #theme)
-        else
-          hl('AtelierItem', idx, #prefix, #prefix + #theme)
+      -- Error line: indented, below the header, only when failed.
+      if rt.status == 'failed' and rt.error then
+        push('    ' .. rt.error, { kind = 'error', spec_name = rt.spec.name, rt = rt })
+        hl('AtelierStatusErr', #lines, 4, -1)
+      end
+
+      -- Variant rows (when expanded).
+      if expanded then
+        local dw = vim.fn.strdisplaywidth
+        for _, theme in ipairs(sv.variants) do
+          local is_current = (state.current.spec_name == rt.spec.name)
+            and (state.current.theme == theme)
+          local marker = is_current and icons.current or ' '
+          local left = '  ' .. marker .. ' ' .. theme
+          local bg = M.background_of(rt.spec, theme)
+          local right = ''
+          if bg == 'dark' then
+            right = icons.sep .. '  dark'
+          elseif bg == 'light' then
+            right = icons.sep .. ' light'
+          end
+
+          -- Right-align by DISPLAY width (not byte length): multi-byte
+          -- glyphs like `•` would otherwise push the suffix left by 2
+          -- cells on the current-theme row.
+          local pad_cols = width - 2 - dw(left) - dw(right)
+          if pad_cols < 1 then pad_cols = 1 end
+          local line = left .. string.rep(' ', pad_cols) .. right
+
+          push(line, { kind = 'theme', spec_name = rt.spec.name, theme = theme, rt = rt })
+          local idx = #lines
+
+          -- Marker highlight (current = green, always visible). Uses BYTE
+          -- offsets since extmarks are byte-based.
+          hl('AtelierCurrent', idx, 2, 2 + #marker)
+          local name_start = 2 + #marker + 1
+          local name_group = is_current and 'AtelierCurrent' or 'AtelierTheme'
+          hl(name_group, idx, name_start, name_start + #theme)
+          if right ~= '' then
+            local suffix_start = #line - #right
+            hl('AtelierThemeBg', idx, suffix_start, -1)
+          end
         end
       end
     end
-
   end
-
-  local function render_section(key)
-    local list = buckets[key]
-    if #list == 0 then return end
-    if any_declared then
-      push('  ' .. SECTION_LABELS[key], { kind = 'section', section = key })
-      hl('AtelierMuted', #lines, 0, -1)
-    end
-    for _, sv in ipairs(list) do
-      render_spec_view(sv)
-    end
-  end
-
-  render_section('dark')
-  render_section('light')
-  render_section('auto')
-
-  push('', { kind = 'spacer' })
 
   -- ── footer ────────────────────────────────────────────────────────────
+  push(rule_line(), { kind = 'rule' })
+  hl('AtelierDivider', #lines, 2, -1)
+
+  local footer_line, keycaps
   if state.ui.mode == 'filter' then
-    push("  type to filter   <CR> apply   <Esc> cancel", { kind = 'footer' })
+    footer_line = '  type to filter ' .. icons.sep .. ' <CR> apply ' .. icons.sep .. ' <Esc> cancel'
+    keycaps = { '<CR>', '<Esc>' }
   else
-    push("  <CR> select  <Tab> fold  / search  B bg  I install  U update  q quit",
-      { kind = 'footer' })
+    footer_line = '  <CR> select ' .. icons.sep .. ' / filter ' .. icons.sep
+      .. ' B bg ' .. icons.sep .. ' I U C ' .. icons.sep .. ' q'
+    keycaps = { '<CR>', '/', 'B', 'I', 'U', 'C', 'q' }
   end
-  hl('AtelierMuted', #lines, 0, -1)
+  push(footer_line, { kind = 'footer' })
+  local footer_idx = #lines
+  hl('AtelierSubtle', footer_idx, 0, -1)
+  -- Overlay keycap highlights on the subtle base.
+  local cursor_col = 2
+  for _, cap in ipairs(keycaps) do
+    local pos = footer_line:find(cap, cursor_col + 1, true)
+    if pos then
+      hl('AtelierKey', footer_idx, pos - 1, pos - 1 + #cap)
+      cursor_col = pos - 1 + #cap
+    end
+  end
 
   return { lines = lines, highlights = highlights, rows = rows }
 end
@@ -251,6 +309,7 @@ end
 function M.toggle_fold(state, spec_name)
   local rt = state.by_name[spec_name]
   if rt then
+    if rt.expanded == nil then rt.expanded = true end
     rt.expanded = not rt.expanded
     state.bus:emit('state_changed')
   end
@@ -261,34 +320,6 @@ end
 function M.set_all_folds(state, expanded)
   for _, rt in ipairs(state.themes) do
     rt.expanded = expanded
-  end
-  state.bus:emit('state_changed')
-end
-
----Toggle every spec inside a section (Dark/Light/Auto). If any spec in
----the bucket is collapsed, expand all of them; otherwise collapse all.
----@param state atelier.State
----@param section 'dark'|'light'|'auto'
-function M.toggle_section(state, section)
-  local function bucket_of(rt)
-    if rt.spec.background == 'dark' then return 'dark' end
-    if rt.spec.background == 'light' then return 'light' end
-    return 'auto'
-  end
-
-  local in_bucket = {}
-  local any_collapsed = false
-  for _, rt in ipairs(state.themes) do
-    if bucket_of(rt) == section then
-      in_bucket[#in_bucket + 1] = rt
-      if not rt.expanded then any_collapsed = true end
-    end
-  end
-  if #in_bucket == 0 then return end
-
-  local target = any_collapsed -- expand all if any are collapsed; else collapse all
-  for _, rt in ipairs(in_bucket) do
-    rt.expanded = target
   end
   state.bus:emit('state_changed')
 end

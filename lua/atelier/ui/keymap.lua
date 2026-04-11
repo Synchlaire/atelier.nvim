@@ -28,15 +28,10 @@ function M.attach(window, preview)
 
   -- <CR>:
   --   theme         -> commit & close
-  --   spec_header   -> toggle that spec's fold
-  --   section       -> toggle every spec in that bucket
+  --   spec_header   -> toggle that spec's fold (optional density control)
   map('<CR>', function()
     local row = window:current_row()
     if not row then return end
-    if row.kind == 'section' and row.section then
-      Picker.toggle_section(window.state, row.section)
-      return
-    end
     if row.kind == 'spec_header' and row.spec_name then
       Picker.toggle_fold(window.state, row.spec_name)
       return
@@ -44,7 +39,7 @@ function M.attach(window, preview)
     if preview:commit(row) then
       window:close()
     end
-  end, 'atelier: select / toggle fold or section')
+  end, 'atelier: select / toggle fold')
 
   -- j/k (and arrow keys) skip non-selectable rows so the cursor never
   -- lands on a spacer, the title, or the footer.

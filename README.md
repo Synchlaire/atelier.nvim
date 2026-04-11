@@ -101,9 +101,9 @@ Filtering force-expands any spec whose name or variants match, so a search like 
 
 ### Dark / light
 
-Atelier never guesses whether a colorscheme is dark or light. If you want it to know, declare it on the spec via `background = 'dark' | 'light'` (or per-variant via `backgrounds = { variant_name = 'dark' }`). When set, atelier writes `vim.o.background` before calling `:colorscheme`, so colorschemes that branch on `vim.o.background` get the right value at load time. As soon as *any* spec declares a background, the picker splits into `── Dark ──` / `── Light ──` / `── Auto ──` sections; until then it stays flat.
+Atelier never guesses whether a colorscheme is dark or light. If you want it to know, declare it on the spec via `background = 'dark' | 'light'` (or per-variant via `backgrounds = { variant_name = 'dark' }`). When set, atelier writes `vim.o.background` before calling `:colorscheme`, so colorschemes that branch on `vim.o.background` get the right value at load time. Declared backgrounds are shown as a `· dark` / `· light` suffix on each variant row in the picker.
 
-Pressing `B` flips the mode. If the *current* spec has a paired variant declared in the opposite mode (e.g. `backgrounds = { ['tokyonight-day'] = 'light', ['tokyonight-night'] = 'dark' }`), atelier switches to it directly — colorscheme and background flip together. Otherwise it just sets `vim.o.background` and lets you pick from the now-sorted section.
+Pressing `B` flips the mode. If the *current* spec has a paired variant declared in the opposite mode (e.g. `backgrounds = { ['tokyonight-day'] = 'light', ['tokyonight-night'] = 'dark' }`), atelier switches to it directly — colorscheme and background flip together. Otherwise it just sets `vim.o.background` and re-renders.
 
 The committed background is persisted alongside the theme name, so the next session restores it before `:colorscheme` runs.
 

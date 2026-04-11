@@ -47,7 +47,7 @@ function M.new(config)
     ui = {
       filter = '',
       mode = 'normal',
-      collapsed_default = (#config.themes > 6), -- big lists start collapsed
+      collapsed_default = false, -- flat list by default; folds are opt-in density control
     },
   }
 

@@ -50,9 +50,9 @@ function M.open(window, close_picker)
     items = items,
     format = function(item)
       return {
-        { item.theme, 'AtelierItem' },
+        { item.theme, 'AtelierTheme' },
         { '  ', 'Normal' },
-        { '(' .. item.spec_name .. ')', 'AtelierMuted' },
+        { '(' .. item.spec_name .. ')', 'AtelierSubtle' },
       }
     end,
     -- Live preview as the user moves through results.

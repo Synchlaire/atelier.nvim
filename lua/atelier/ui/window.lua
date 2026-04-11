@@ -37,13 +37,16 @@ function M.open(state)
     row = math.floor((vim.o.lines - height) / 2),
     col = math.floor((vim.o.columns - width) / 2),
     style = 'minimal',
-    border = 'rounded',
-    title = ' atelier ',
+    border = 'single',
+    title = ' ATELIER ',
     title_pos = 'center',
   })
 
   vim.api.nvim_set_option_value('cursorline', true, { win = win })
   vim.api.nvim_set_option_value('wrap', false, { win = win })
+  vim.api.nvim_set_option_value('winhighlight',
+    'NormalFloat:AtelierNormal,FloatBorder:AtelierBorder,FloatTitle:AtelierTitle,CursorLine:AtelierCursorLine',
+    { win = win })
 
   ---@type atelier.Window
   local self = setmetatable({
@@ -161,7 +164,8 @@ end
 function Window:render()
   if self._closed or not vim.api.nvim_buf_is_valid(self.buf) then return end
   local Picker = require('atelier.ui.picker')
-  local view = Picker.render(self.state)
+  local w = vim.api.nvim_win_is_valid(self.win) and vim.api.nvim_win_get_width(self.win) or 72
+  local view = Picker.render(self.state, w)
   apply_diff(self, view)
 end
 
@@ -180,7 +184,7 @@ function Window:move_by(delta)
   if not vim.api.nvim_win_is_valid(self.win) then return end
   local function selectable(row)
     if not row then return false end
-    return row.kind == 'theme' or row.kind == 'spec_header' or row.kind == 'section'
+    return row.kind == 'theme' or row.kind == 'spec_header'
   end
 
   local lnum = vim.api.nvim_win_get_cursor(self.win)[1]

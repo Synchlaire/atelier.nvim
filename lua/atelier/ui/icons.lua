@@ -9,9 +9,11 @@ M.nerd = {
   installing = '',
   updating  = '',
   failed    = '',
-  current   = '',
+  current   = '•',
   expanded  = '▾',
   collapsed = '▸',
+  divider   = '─',
+  sep       = '·',
 }
 
 M.ascii = {
@@ -23,6 +25,8 @@ M.ascii = {
   current   = '*',
   expanded  = '-',
   collapsed = '+',
+  divider   = '-',
+  sep       = '.',
 }
 
 ---@param use_ascii boolean
