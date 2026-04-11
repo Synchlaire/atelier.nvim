@@ -55,6 +55,12 @@ function M.attach(window, preview)
   map('k', function() window:move_by(-1) end, 'atelier: prev selectable')
   map('<Down>', function() window:move_by(1) end, 'atelier: next selectable')
   map('<Up>', function() window:move_by(-1) end, 'atelier: prev selectable')
+  -- Column navigation (only meaningful when the list overflows into 2+
+  -- columns; no-ops when the list is single-column).
+  map('h', function() window:move_col(-1) end, 'atelier: prev column')
+  map('l', function() window:move_col(1) end, 'atelier: next column')
+  map('<Left>', function() window:move_col(-1) end, 'atelier: prev column')
+  map('<Right>', function() window:move_col(1) end, 'atelier: next column')
 
   -- Tab also toggles the fold under the cursor; works on either a header
   -- row or a variant row inside a group.

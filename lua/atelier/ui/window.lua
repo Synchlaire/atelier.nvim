@@ -1,34 +1,29 @@
--- Floating window lifecycle. Owns TWO coordinated floatwins:
---   1. list pane  — the scrollable theme list (primary, keymapped)
---   2. preview pane — a scratch buffer with a Lua code fixture the user
---      can visually inspect under the currently-loaded colorscheme
+-- Floating window lifecycle. Single list pane — the preview pane is
+-- deliberately disabled for now; when/if it comes back it'll be a
+-- separate, opt-in component. Owns the buffer + window handles, applies
+-- a PickerView with diffed writes, and exposes hooks the keymap and
+-- cursor-move handlers attach to.
 --
--- Both panes open together, close together. The preview buffer's
--- filetype is `lua` so treesitter + the active colorscheme highlight it
--- with the same groups as real code — no custom preview logic, the
--- colorscheme does the work.
---
-local Sample = require('atelier.ui.sample')
-
 local M = {}
 
 local NS = vim.api.nvim_create_namespace('atelier.picker')
 
--- Layout constants. The combined width (list + gap + preview + 2*border)
--- is clamped to 80% of screen columns; heights clamped to 70%.
-local LIST_W = 50
-local PREVIEW_W = 44
-local GAP = 2
-local HEIGHT = 26
+-- The list pane is wider now that it's the only pane. Clamped to 80% of
+-- the available columns and 80% of the lines so it always has breathing
+-- room around it.
+local LIST_W = 80
+local LIST_H = 28
 
 ---@class atelier.Window
----@field buf integer                   list buffer
----@field win integer                   list window
----@field preview_buf integer|nil       code-sample buffer
----@field preview_win integer|nil       code-sample window
----@field width integer                 inner width of the list pane
+---@field buf integer
+---@field win integer
+---@field width integer        inner width of the pane (no border)
+---@field height integer       inner height of the pane (no border)
 ---@field state atelier.State
 ---@field rows atelier.PickerRow[]
+---@field rows_by_col table<integer, atelier.PickerRow[]>
+---@field col_byte_starts integer[]
+---@field cols integer
 ---@field prev_lines string[]
 ---@field hovered_row atelier.PickerRow|nil
 ---@field on_close fun()|nil
@@ -41,24 +36,9 @@ Window.__index = Window
 ---@param state atelier.State
 ---@return atelier.Window
 function M.open(state)
-  -- Clamp to available space.
-  local total_w = LIST_W + GAP + PREVIEW_W + 4 -- +4 for the two 1px borders
-  local max_w = math.floor(vim.o.columns * 0.95)
-  local list_w = LIST_W
-  local preview_w = PREVIEW_W
-  if total_w > max_w then
-    local scale = (max_w - GAP - 4) / (LIST_W + PREVIEW_W)
-    list_w = math.max(36, math.floor(LIST_W * scale))
-    preview_w = math.max(24, math.floor(PREVIEW_W * scale))
-  end
-  local height = math.min(HEIGHT, math.floor(vim.o.lines * 0.7))
+  local width = math.min(LIST_W, math.floor(vim.o.columns * 0.8))
+  local height = math.min(LIST_H, math.floor(vim.o.lines * 0.8))
 
-  -- Center the combined layout.
-  local combined = list_w + GAP + preview_w + 4
-  local start_col = math.floor((vim.o.columns - combined) / 2)
-  local start_row = math.floor((vim.o.lines - height) / 2)
-
-  -- List pane.
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = buf })
   vim.api.nvim_set_option_value('buftype', 'nofile', { buf = buf })
@@ -66,10 +46,10 @@ function M.open(state)
 
   local win = vim.api.nvim_open_win(buf, true, {
     relative = 'editor',
-    width = list_w,
+    width = width,
     height = height,
-    row = start_row,
-    col = start_col,
+    row = math.floor((vim.o.lines - height) / 2),
+    col = math.floor((vim.o.columns - width) / 2),
     style = 'minimal',
     border = 'single',
     title = ' ATELIER ',
@@ -82,44 +62,17 @@ function M.open(state)
     'NormalFloat:AtelierNormal,FloatBorder:AtelierBorder,FloatTitle:AtelierTitle,CursorLine:AtelierCursorLine',
     { win = win })
 
-  -- Preview pane.
-  local preview_buf = vim.api.nvim_create_buf(false, true)
-  vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = preview_buf })
-  vim.api.nvim_set_option_value('buftype', 'nofile', { buf = preview_buf })
-  vim.api.nvim_buf_set_lines(preview_buf, 0, -1, false, Sample.lines)
-  -- Set filetype so treesitter/syntax highlight the fixture under the
-  -- active colorscheme.
-  vim.api.nvim_set_option_value('filetype', 'lua', { buf = preview_buf })
-
-  local preview_win = vim.api.nvim_open_win(preview_buf, false, {
-    relative = 'editor',
-    width = preview_w,
-    height = height,
-    row = start_row,
-    col = start_col + list_w + 2 + GAP, -- +2 for list's right border
-    style = 'minimal',
-    border = 'single',
-    title = ' PREVIEW ',
-    title_pos = 'center',
-    focusable = false,
-  })
-
-  vim.api.nvim_set_option_value('wrap', false, { win = preview_win })
-  vim.api.nvim_set_option_value('cursorline', false, { win = preview_win })
-  vim.api.nvim_set_option_value('number', false, { win = preview_win })
-  vim.api.nvim_set_option_value('winhighlight',
-    'NormalFloat:Normal,FloatBorder:AtelierBorder,FloatTitle:AtelierTitle',
-    { win = preview_win })
-
   ---@type atelier.Window
   local self = setmetatable({
     buf = buf,
     win = win,
-    preview_buf = preview_buf,
-    preview_win = preview_win,
-    width = list_w,
+    width = width,
+    height = height,
     state = state,
     rows = {},
+    rows_by_col = {},
+    col_byte_starts = { 2 },
+    cols = 1,
     prev_lines = {},
     hovered_row = nil,
     on_close = nil,
@@ -156,12 +109,6 @@ function Window:_dispose()
     self.state.bus:off('state_changed', self._bus_listener)
     self._bus_listener = nil
   end
-  -- Close the preview pane alongside the list.
-  if self.preview_win and vim.api.nvim_win_is_valid(self.preview_win) then
-    pcall(vim.api.nvim_win_close, self.preview_win, true)
-  end
-  self.preview_win = nil
-  self.preview_buf = nil
   if self.on_close then
     pcall(self.on_close)
     self.on_close = nil
@@ -219,33 +166,56 @@ local function apply_diff(self, view)
 
   self.prev_lines = next_lines
   self.rows = view.rows
+  self.rows_by_col = view.rows_by_col or {}
+  self.col_byte_starts = view.col_byte_starts or { 2 }
+  self.cols = view.cols or 1
 end
 
 function Window:render()
   if self._closed or not vim.api.nvim_buf_is_valid(self.buf) then return end
   local Picker = require('atelier.ui.picker')
-  local view = Picker.render(self.state, self.width, self.hovered_row)
+  local view = Picker.render(self.state, self.width, self.height, self.hovered_row)
   apply_diff(self, view)
 end
 
----Re-render ONLY the info row (cursor moved, nothing else changed).
----Falls back to a full render because the info row position depends on
----the full layout — simpler than tracking a single line offset, and
----apply_diff will short-circuit all unchanged lines anyway.
+---Re-render triggered by cursor move (info row depends on hovered_row).
 ---@param row atelier.PickerRow|nil
 function Window:refresh_info(row)
   self.hovered_row = row
   self:render()
 end
 
+---Return the column index (1-based) the cursor is currently in, based on
+---its byte position relative to the column byte starts.
+---@return integer
+function Window:current_col_index()
+  if not vim.api.nvim_win_is_valid(self.win) then return 1 end
+  local pos = vim.api.nvim_win_get_cursor(self.win)
+  local byte = pos[2]
+  local ci = 1
+  for i = 1, self.cols do
+    if byte >= (self.col_byte_starts[i] or 2) then ci = i end
+  end
+  return ci
+end
+
 ---@return atelier.PickerRow|nil
 function Window:current_row()
   if not vim.api.nvim_win_is_valid(self.win) then return nil end
   local lnum = vim.api.nvim_win_get_cursor(self.win)[1]
+  -- Prefer the column-aware lookup when we have multi-column content.
+  local triple = self.rows_by_col[lnum]
+  if triple then
+    local ci = self:current_col_index()
+    local row = triple[ci]
+    if row and row.kind ~= 'spacer' then return row end
+    -- Fall through to the primary row if the hovered column has nothing.
+  end
   return self.rows[lnum]
 end
 
----Move the cursor by `delta` lines, skipping rows the user can't act on.
+---Move the cursor vertically by `delta` lines inside the current column,
+---skipping non-selectable rows.
 ---@param delta integer
 function Window:move_by(delta)
   if not vim.api.nvim_win_is_valid(self.win) then return end
@@ -254,15 +224,62 @@ function Window:move_by(delta)
     return row.kind == 'theme' or row.kind == 'spec_header'
   end
 
+  local ci = self:current_col_index()
+  local target_col = self.col_byte_starts[ci] or 2
+
+  local function row_at(i)
+    local triple = self.rows_by_col[i]
+    if triple then return triple[ci] end
+    return self.rows[i]
+  end
+
   local lnum = vim.api.nvim_win_get_cursor(self.win)[1]
   local n = #self.rows
   local i = lnum + delta
   while i >= 1 and i <= n do
-    if selectable(self.rows[i]) then
-      pcall(vim.api.nvim_win_set_cursor, self.win, { i, 2 })
+    if selectable(row_at(i)) then
+      pcall(vim.api.nvim_win_set_cursor, self.win, { i, target_col })
       return
     end
     i = i + delta
+  end
+end
+
+---Move the cursor horizontally to the previous/next column. Tries to
+---land on a selectable row at or near the current visual line.
+---@param delta integer  -1 = left, +1 = right
+function Window:move_col(delta)
+  if not vim.api.nvim_win_is_valid(self.win) then return end
+  if self.cols <= 1 then return end
+  local ci = self:current_col_index()
+  local target_ci = ci + delta
+  if target_ci < 1 or target_ci > self.cols then return end
+  local target_col = self.col_byte_starts[target_ci] or 2
+
+  local function selectable(row)
+    if not row then return false end
+    return row.kind == 'theme' or row.kind == 'spec_header'
+  end
+  local function row_at(i)
+    local triple = self.rows_by_col[i]
+    if triple then return triple[target_ci] end
+    return nil
+  end
+
+  local lnum = vim.api.nvim_win_get_cursor(self.win)[1]
+  -- Try the current line first, then search outward.
+  if selectable(row_at(lnum)) then
+    pcall(vim.api.nvim_win_set_cursor, self.win, { lnum, target_col })
+    return
+  end
+  local n = #self.rows
+  for dist = 1, n do
+    for _, i in ipairs({ lnum - dist, lnum + dist }) do
+      if i >= 1 and i <= n and selectable(row_at(i)) then
+        pcall(vim.api.nvim_win_set_cursor, self.win, { i, target_col })
+        return
+      end
+    end
   end
 end
 
