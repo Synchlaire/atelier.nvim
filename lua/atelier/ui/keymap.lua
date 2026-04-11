@@ -55,12 +55,17 @@ function M.attach(window, preview)
   map('k', function() window:move_by(-1) end, 'atelier: prev selectable')
   map('<Down>', function() window:move_by(1) end, 'atelier: next selectable')
   map('<Up>', function() window:move_by(-1) end, 'atelier: prev selectable')
-  -- Column navigation (only meaningful when the list overflows into 2+
-  -- columns; no-ops when the list is single-column).
-  map('h', function() window:move_col(-1) end, 'atelier: prev column')
-  map('l', function() window:move_col(1) end, 'atelier: next column')
-  map('<Left>', function() window:move_col(-1) end, 'atelier: prev column')
-  map('<Right>', function() window:move_col(1) end, 'atelier: next column')
+  -- h folds the current spec, l unfolds it. Works from either the spec
+  -- header row or any variant row inside the group.
+  local function fold_at_cursor(expanded)
+    local row = window:current_row()
+    if not row or not row.spec_name then return end
+    Picker.set_fold(window.state, row.spec_name, expanded)
+  end
+  map('h', function() fold_at_cursor(false) end, 'atelier: fold spec')
+  map('l', function() fold_at_cursor(true) end, 'atelier: unfold spec')
+  map('<Left>', function() fold_at_cursor(false) end, 'atelier: fold spec')
+  map('<Right>', function() fold_at_cursor(true) end, 'atelier: unfold spec')
 
   -- Tab also toggles the fold under the cursor; works on either a header
   -- row or a variant row inside a group.

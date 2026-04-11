@@ -8,9 +8,6 @@ local M = {}
 
 local NS = vim.api.nvim_create_namespace('atelier.picker')
 
--- The list pane is wider now that it's the only pane. Clamped to 80% of
--- the available columns and 80% of the lines so it always has breathing
--- room around it.
 local LIST_W = 80
 local LIST_H = 28
 
@@ -21,9 +18,6 @@ local LIST_H = 28
 ---@field height integer       inner height of the pane (no border)
 ---@field state atelier.State
 ---@field rows atelier.PickerRow[]
----@field rows_by_col table<integer, atelier.PickerRow[]>
----@field col_byte_starts integer[]
----@field cols integer
 ---@field prev_lines string[]
 ---@field hovered_row atelier.PickerRow|nil
 ---@field on_close fun()|nil
@@ -70,9 +64,6 @@ function M.open(state)
     height = height,
     state = state,
     rows = {},
-    rows_by_col = {},
-    col_byte_starts = { 2 },
-    cols = 1,
     prev_lines = {},
     hovered_row = nil,
     on_close = nil,
@@ -166,9 +157,6 @@ local function apply_diff(self, view)
 
   self.prev_lines = next_lines
   self.rows = view.rows
-  self.rows_by_col = view.rows_by_col or {}
-  self.col_byte_starts = view.col_byte_starts or { 2 }
-  self.cols = view.cols or 1
 end
 
 function Window:render()
@@ -185,37 +173,14 @@ function Window:refresh_info(row)
   self:render()
 end
 
----Return the column index (1-based) the cursor is currently in, based on
----its byte position relative to the column byte starts.
----@return integer
-function Window:current_col_index()
-  if not vim.api.nvim_win_is_valid(self.win) then return 1 end
-  local pos = vim.api.nvim_win_get_cursor(self.win)
-  local byte = pos[2]
-  local ci = 1
-  for i = 1, self.cols do
-    if byte >= (self.col_byte_starts[i] or 2) then ci = i end
-  end
-  return ci
-end
-
 ---@return atelier.PickerRow|nil
 function Window:current_row()
   if not vim.api.nvim_win_is_valid(self.win) then return nil end
   local lnum = vim.api.nvim_win_get_cursor(self.win)[1]
-  -- Prefer the column-aware lookup when we have multi-column content.
-  local triple = self.rows_by_col[lnum]
-  if triple then
-    local ci = self:current_col_index()
-    local row = triple[ci]
-    if row and row.kind ~= 'spacer' then return row end
-    -- Fall through to the primary row if the hovered column has nothing.
-  end
   return self.rows[lnum]
 end
 
----Move the cursor vertically by `delta` lines inside the current column,
----skipping non-selectable rows.
+---Move the cursor vertically by `delta` lines, skipping non-selectable rows.
 ---@param delta integer
 function Window:move_by(delta)
   if not vim.api.nvim_win_is_valid(self.win) then return end
@@ -224,62 +189,15 @@ function Window:move_by(delta)
     return row.kind == 'theme' or row.kind == 'spec_header'
   end
 
-  local ci = self:current_col_index()
-  local target_col = self.col_byte_starts[ci] or 2
-
-  local function row_at(i)
-    local triple = self.rows_by_col[i]
-    if triple then return triple[ci] end
-    return self.rows[i]
-  end
-
   local lnum = vim.api.nvim_win_get_cursor(self.win)[1]
   local n = #self.rows
   local i = lnum + delta
   while i >= 1 and i <= n do
-    if selectable(row_at(i)) then
-      pcall(vim.api.nvim_win_set_cursor, self.win, { i, target_col })
+    if selectable(self.rows[i]) then
+      pcall(vim.api.nvim_win_set_cursor, self.win, { i, 2 })
       return
     end
     i = i + delta
-  end
-end
-
----Move the cursor horizontally to the previous/next column. Tries to
----land on a selectable row at or near the current visual line.
----@param delta integer  -1 = left, +1 = right
-function Window:move_col(delta)
-  if not vim.api.nvim_win_is_valid(self.win) then return end
-  if self.cols <= 1 then return end
-  local ci = self:current_col_index()
-  local target_ci = ci + delta
-  if target_ci < 1 or target_ci > self.cols then return end
-  local target_col = self.col_byte_starts[target_ci] or 2
-
-  local function selectable(row)
-    if not row then return false end
-    return row.kind == 'theme' or row.kind == 'spec_header'
-  end
-  local function row_at(i)
-    local triple = self.rows_by_col[i]
-    if triple then return triple[target_ci] end
-    return nil
-  end
-
-  local lnum = vim.api.nvim_win_get_cursor(self.win)[1]
-  -- Try the current line first, then search outward.
-  if selectable(row_at(lnum)) then
-    pcall(vim.api.nvim_win_set_cursor, self.win, { lnum, target_col })
-    return
-  end
-  local n = #self.rows
-  for dist = 1, n do
-    for _, i in ipairs({ lnum - dist, lnum + dist }) do
-      if i >= 1 and i <= n and selectable(row_at(i)) then
-        pcall(vim.api.nvim_win_set_cursor, self.win, { i, target_col })
-        return
-      end
-    end
   end
 end
 

@@ -47,7 +47,7 @@ function M.new(config)
     ui = {
       filter = '',
       mode = 'normal',
-      collapsed_default = false, -- flat list by default; folds are opt-in density control
+      collapsed_default = true, -- folded by default; l to unfold, h to fold
     },
   }
 
