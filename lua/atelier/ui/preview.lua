@@ -37,13 +37,42 @@ end
 ---@return boolean
 function Preview:preview_now(row)
   if not row or row.kind ~= 'theme' or not row.rt then return false end
-  if row.rt.status ~= 'installed' then return false end
+  return self:preview_item({
+    spec_name = row.spec_name,
+    theme = row.theme,
+    rt = row.rt,
+  })
+end
 
-  local key = row.spec_name .. '|' .. row.theme
+---@param item { spec_name: string, theme: string, rt: atelier.ThemeRuntime }
+---@return boolean
+function Preview:preview_item(item)
+  if item.rt.status ~= 'installed' then
+    self.state.ui.message = item.rt.status == 'failed'
+      and ('Cannot preview %s — update or retry first.'):format(item.theme)
+      or ('%s is not installed — press I to install.'):format(item.theme)
+    self.state.bus:emit('state_changed')
+    return false
+  end
+
+  local key = item.spec_name .. '|' .. item.theme
   if key == self.previewed_key then return false end
-  self.previewed_key = key
 
-  local ok = Loader.load(row.rt.spec, row.theme, nil)
+  local ok, err = Loader.load(item.rt.spec, item.theme, nil)
+  if not ok then
+    self.state.ui.message = ('Preview failed: %s'):format(tostring(err))
+    self.state.bus:emit('state_changed')
+    return false
+  end
+
+  self.previewed_key = key
+  self.state.ui.previewed = {
+    spec_name = item.spec_name,
+    theme = item.theme,
+    background = vim.o.background,
+  }
+  self.state.ui.message = nil
+  self.state.bus:emit('state_changed')
   return ok
 end
 
@@ -52,14 +81,26 @@ end
 ---@return boolean
 function Preview:commit(row)
   if not row or row.kind ~= 'theme' or not row.rt then return false end
-  if row.rt.status ~= 'installed' then
-    vim.notify('[atelier] theme not installed: ' .. row.theme, vim.log.levels.WARN)
+  return self:commit_item({
+    spec_name = row.spec_name,
+    theme = row.theme,
+    rt = row.rt,
+  })
+end
+
+---@param item { spec_name: string, theme: string, rt: atelier.ThemeRuntime }
+---@return boolean
+function Preview:commit_item(item)
+  if item.rt.status ~= 'installed' then
+    self.state.ui.message = ('%s is not installed — press I to install.'):format(item.theme)
+    self.state.bus:emit('state_changed')
     return false
   end
 
-  local ok, err = Loader.load(row.rt.spec, row.theme, self.state.config.on_load)
+  local ok, err = Loader.load(item.rt.spec, item.theme, self.state.config.on_load)
   if not ok then
-    vim.notify('[atelier] failed to load theme: ' .. tostring(err), vim.log.levels.ERROR)
+    self.state.ui.message = ('Apply failed: %s'):format(tostring(err))
+    self.state.bus:emit('state_changed')
     return false
   end
 
@@ -67,14 +108,16 @@ function Preview:commit(row)
   -- either the spec or a prior `B` toggle that changed it away from the
   -- snapshot. nil means "atelier had no opinion, leave it alone".
   local bg = nil
-  if Loader.declared_background(row.rt.spec, row.theme)
+  if Loader.declared_background(item.rt.spec, item.theme)
     or vim.o.background ~= self.snapshot_background then
     bg = vim.o.background
   end
 
-  self.state.current = { spec_name = row.spec_name, theme = row.theme, background = bg }
-  self.state.last_good = { spec_name = row.spec_name, theme = row.theme, background = bg }
+  self.state.current = { spec_name = item.spec_name, theme = item.theme, background = bg }
+  self.state.last_good = vim.deepcopy(self.state.current)
   self.committed = true
+  self.state.ui.previewed = nil
+  self.state.ui.message = ('Applied %s · saved to the bench.'):format(item.theme)
   if self.state.config.persist then
     require('atelier.persist').write(self.state.config.data_dir, self.state.current)
   end
@@ -84,6 +127,7 @@ end
 
 ---Restore the snapshot if nothing was committed. Called from on_close.
 function Preview:cleanup()
+  self.state.ui.previewed = nil
   if not self.committed then
     -- Restore background BEFORE the colorscheme so colorschemes that
     -- branch on it pick up the original mode at load time.
@@ -94,6 +138,27 @@ function Preview:cleanup()
       pcall(vim.cmd.colorscheme, self.snapshot)
     end
   end
+end
+
+---@return { theme: string|nil, background: 'dark'|'light', previewed: atelier.Current|nil, key: string|nil }
+function Preview:visual_snapshot()
+  return {
+    theme = vim.g.colors_name,
+    background = vim.o.background,
+    previewed = vim.deepcopy(self.state.ui.previewed),
+    key = self.previewed_key,
+  }
+end
+
+---@param snapshot { theme: string|nil, background: 'dark'|'light', previewed: atelier.Current|nil, key: string|nil }
+function Preview:restore_visual(snapshot)
+  vim.o.background = snapshot.background
+  if snapshot.theme and vim.g.colors_name ~= snapshot.theme then
+    pcall(vim.cmd.colorscheme, snapshot.theme)
+  end
+  self.state.ui.previewed = snapshot.previewed
+  self.previewed_key = snapshot.key
+  self.state.bus:emit('state_changed')
 end
 
 return M

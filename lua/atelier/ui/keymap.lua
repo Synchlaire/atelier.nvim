@@ -15,8 +15,18 @@ function M.attach(window, preview)
     vim.keymap.set('n', key, fn, { buffer = window.buf, nowait = true, silent = true, desc = desc })
   end
 
-  map('q', function() window:close() end, 'atelier: close')
+  local function dismiss_help()
+    if not window.state.ui.help then return false end
+    window.state.ui.help = false
+    window:render()
+    return true
+  end
+
+  map('q', function()
+    if not dismiss_help() then window:close() end
+  end, 'atelier: close')
   map('<Esc>', function()
+    if dismiss_help() then return end
     -- If a filter is active, <Esc> clears it instead of closing the picker.
     if window.state.ui.filter ~= '' then
       window.state.ui.filter = ''
@@ -25,6 +35,11 @@ function M.attach(window, preview)
       window:close()
     end
   end, 'atelier: close / clear filter')
+
+  map('?', function()
+    window.state.ui.help = not window.state.ui.help
+    window:render()
+  end, 'atelier: show actions')
 
   -- <CR>:
   --   theme         -> commit & close (persists)
@@ -100,7 +115,7 @@ function M.attach(window, preview)
 
   -- Snacks.picker handoff if available; falls back to inline filter.
   local function snacks_open()
-    require('atelier.ui.snacks').open(window, function() window:close() end)
+    require('atelier.ui.snacks').open(window, preview)
   end
   map('<C-/>', snacks_open, 'atelier: snacks search')
   map('<C-_>', snacks_open, 'atelier: snacks search') -- terminal alias
@@ -113,28 +128,48 @@ function M.attach(window, preview)
   local function toggle_background()
     local s = window.state
     local target_mode = (vim.o.background == 'dark') and 'light' or 'dark'
+    local active = s.ui.previewed or s.current
 
-    if s.current.spec_name then
-      local rt = s.by_name[s.current.spec_name]
+    if active.spec_name then
+      local rt = s.by_name[active.spec_name]
       if rt then
         local variant = Picker.find_variant_for(rt.spec, target_mode)
         if variant then
-          require('atelier.api').load(s.current.spec_name, variant)
-          window:render()
+          preview:preview_item({
+            spec_name = rt.spec.name,
+            theme = variant,
+            rt = rt,
+          })
           return
         end
       end
     end
 
     vim.o.background = target_mode
+    s.ui.message = ('Background preview · %s · Enter apply or Esc restore.'):format(target_mode)
     window:render()
   end
-  map('B', toggle_background, 'atelier: toggle background')
+  map('b', toggle_background, 'atelier: toggle background')
+  map('B', toggle_background, 'atelier: toggle background (alias)')
   map('t', toggle_background, 'atelier: toggle background (alias)')
 
   map('I', function() Manager.install_missing(window.state) end, 'atelier: install missing')
   map('U', function() Manager.update_all(window.state) end, 'atelier: update all')
-  map('C', function() Manager.clean(window.state) end, 'atelier: clean unused')
+  map('C', function()
+    local plan = Manager.clean_plan(window.state)
+    if #plan == 0 then
+      Manager.clean(window.state, plan)
+      return
+    end
+
+    local names = {}
+    for _, item in ipairs(plan) do names[#names + 1] = '  ' .. item.name end
+    local prompt = ('Archive %d unused theme%s?\n\n%s\n\nYou can restore them from sites/trash.')
+      :format(#plan, #plan == 1 and '' or 's', table.concat(names, '\n'))
+    if vim.fn.confirm(prompt, '&Archive\n&Cancel', 2) == 1 then
+      Manager.clean(window.state, plan)
+    end
+  end, 'atelier: archive unused')
   map('R', function() window:render() end, 'atelier: redraw')
 end
 

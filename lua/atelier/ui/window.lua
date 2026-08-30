@@ -11,6 +11,17 @@ local NS = vim.api.nvim_create_namespace('atelier.picker')
 local LIST_W = 80
 local LIST_H = 28
 
+local function desired_height(state)
+  local Manager = require('atelier.manager')
+  local rows = 7
+  for _, rt in ipairs(state.themes) do
+    rows = rows + 1
+    if rt.status == 'failed' and rt.error then rows = rows + 1 end
+    if rt.expanded then rows = rows + math.max(1, #Manager.discover(state, rt)) end
+  end
+  return math.max(12, math.min(LIST_H, rows))
+end
+
 ---@class atelier.Window
 ---@field buf integer
 ---@field win integer
@@ -31,7 +42,7 @@ Window.__index = Window
 ---@return atelier.Window
 function M.open(state)
   local width = math.min(LIST_W, math.floor(vim.o.columns * 0.8))
-  local height = math.min(LIST_H, math.floor(vim.o.lines * 0.8))
+  local height = math.min(desired_height(state), math.floor(vim.o.lines * 0.8))
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = buf })
@@ -46,7 +57,7 @@ function M.open(state)
     col = math.floor((vim.o.columns - width) / 2),
     style = 'minimal',
     border = 'single',
-    title = ' ATELIER ',
+    title = ' ATELIER · WORKSHOP ',
     title_pos = 'center',
   })
 

@@ -43,7 +43,7 @@ test('persistence round-trips optional background', function()
   vim.fn.delete(dir, 'rf')
 end)
 
-test('snacks commit persists background and snapshots state', function()
+test('preview commit persists background and snapshots state', function()
   local original_loader = package.loaded['atelier.loader']
   local original_persist = package.loaded['atelier.persist']
   local persisted
@@ -62,11 +62,13 @@ test('snacks commit persists background and snapshots state', function()
       persisted = vim.deepcopy(current)
     end,
   }
-  package.loaded['atelier.ui.snacks'] = nil
+  package.loaded['atelier.ui.preview'] = nil
 
   local emitted = 0
   local state = {
     config = { persist = true, data_dir = '/unused', on_load = nil },
+    current = {},
+    ui = {},
     bus = {
       emit = function()
         emitted = emitted + 1
@@ -76,10 +78,11 @@ test('snacks commit persists background and snapshots state', function()
   local item = {
     spec_name = 'plain',
     theme = 'plain',
-    rt = { spec = { name = 'plain', background = 'light' } },
+    rt = { status = 'installed', spec = { name = 'plain', background = 'light' } },
   }
 
-  local ok = require('atelier.ui.snacks').commit(state, item, 'dark')
+  local preview = require('atelier.ui.preview').new(state)
+  local ok = preview:commit_item(item)
   assert(ok)
   eq(state.current, { spec_name = 'plain', theme = 'plain', background = 'light' })
   eq(state.last_good, state.current)
@@ -89,7 +92,39 @@ test('snacks commit persists background and snapshots state', function()
 
   package.loaded['atelier.loader'] = original_loader
   package.loaded['atelier.persist'] = original_persist
-  package.loaded['atelier.ui.snacks'] = nil
+  package.loaded['atelier.ui.preview'] = nil
+end)
+
+test('clean archives unknown theme directories', function()
+  local temp = vim.fn.tempname()
+  local sites = vim.fs.joinpath(temp, 'sites')
+  vim.fn.mkdir(vim.fs.joinpath(sites, 'known'), 'p')
+  vim.fn.mkdir(vim.fs.joinpath(sites, 'unused'), 'p')
+  vim.fn.writefile({ 'keep me' }, vim.fs.joinpath(sites, 'unused', 'marker'))
+
+  local events = {}
+  local state = {
+    config = { data_dir = temp },
+    themes = {
+      { spec = { name = 'known', url = 'https://example.invalid/known' } },
+    },
+    ui = {},
+    bus = { emit = function(_, event) events[#events + 1] = event end },
+  }
+
+  local manager = require('atelier.manager')
+  local plan = manager.clean_plan(state)
+  eq(#plan, 1)
+  eq(plan[1].name, 'unused')
+
+  local result = manager.clean(state, plan)
+  eq(result.moved, 1)
+  eq(result.failed, 0)
+  assert(vim.fn.isdirectory(vim.fs.joinpath(sites, 'unused')) == 0)
+  assert(vim.fn.filereadable(vim.fs.joinpath(result.trash_dir, 'unused', 'marker')) == 1)
+  assert(vim.fn.isdirectory(vim.fs.joinpath(sites, 'known')) == 1)
+  eq(events[#events], 'state_changed')
+  vim.fn.delete(temp, 'rf')
 end)
 
 print(('atelier: %d tests passed'):format(passed))

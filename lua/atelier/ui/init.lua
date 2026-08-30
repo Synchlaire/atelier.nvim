@@ -15,6 +15,12 @@ function M.open(state)
   Manager.refresh_status(state)
   State.reset_ui(state) -- clear stale filter/mode from a prior session
 
+  -- Open the active collection before sizing the workshop window.
+  if state.current.spec_name then
+    local rt = state.by_name[state.current.spec_name]
+    if rt then rt.expanded = true end
+  end
+
   local window = Window.open(state)
   local preview = Preview.new(state)
 
@@ -48,15 +54,6 @@ function M.open(state)
     return false
   end
 
-  -- If the current theme's spec is collapsed, expand it so the cursor can
-  -- land on the actual variant rather than the header.
-  if state.current.spec_name then
-    local rt = state.by_name[state.current.spec_name]
-    if rt then
-      rt.expanded = true
-      window:render()
-    end
-  end
   place_cursor()
 end
 

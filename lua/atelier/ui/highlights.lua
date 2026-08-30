@@ -39,6 +39,7 @@ function M.setup()
     AtelierTheme        = { link = 'Normal' },
     AtelierThemeBg      = { link = 'Comment' },
     AtelierCurrent      = { link = prefer({ 'DiagnosticOk', 'String' }) },
+    AtelierPreview      = { link = prefer({ 'DiagnosticInfo', 'Special' }) },
     AtelierGlyph        = { link = prefer({ 'Delimiter', 'Special' }) },
     AtelierKey          = { link = 'Special' },
     AtelierStatusOk     = { link = 'DiagnosticOk' },

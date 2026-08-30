@@ -83,8 +83,6 @@ function M.render(state, width, height, hovered)
   width = width or 72
   height = height or 28
 
-  local body_w = width - 4 -- 2-char left margin, 2-char right margin
-
   local function push(line, row)
     lines[#lines + 1] = line
     rows[#rows + 1] = row
@@ -101,6 +99,29 @@ function M.render(state, width, height, hovered)
 
   local function rule_line()
     return '  ' .. string.rep(icons.divider, math.max(0, width - 4))
+  end
+
+  if state.ui.help then
+    local help = {
+      { '  WORKSHOP ACTIONS', 'AtelierTitle' },
+      { rule_line(), 'AtelierDivider' },
+      { '  <Space>  preview finish', 'AtelierSubtle' },
+      { '  <CR>     apply + remember', 'AtelierSubtle' },
+      { '  b        preview light / dark pair', 'AtelierSubtle' },
+      { '  /        filter this bench', 'AtelierSubtle' },
+      { '  h/l      fold / unfold collection', 'AtelierSubtle' },
+      { '  I/U      install missing / update installed', 'AtelierSubtle' },
+      { '  C        archive unused themes', 'AtelierSubtle' },
+      { '  zM/zR    fold / unfold everything', 'AtelierSubtle' },
+      { rule_line(), 'AtelierDivider' },
+      { '  ? or Esc  return to the bench', 'AtelierSubtle' },
+    }
+    for _, entry in ipairs(help) do
+      push(entry[1], { kind = 'info' })
+      hl(entry[2], #lines, 0, -1)
+    end
+    while #lines < height do push('', { kind = 'spacer' }) end
+    return { lines = lines, highlights = highlights, rows = rows }
   end
 
   -- ── pre-compute spec_views (filter logic) ────────────────────────────
@@ -134,7 +155,7 @@ function M.render(state, width, height, hovered)
   end
 
   -- ── header ────────────────────────────────────────────────────────────
-  local title = 'ATELIER'
+  local title = 'ATELIER BENCH'
   local count_text
   if filter ~= '' then
     count_text = (' %s %d/%d themes'):format(icons.sep, visible_variants, total_variants)
@@ -233,7 +254,20 @@ function M.render(state, width, height, hovered)
         for _, theme in ipairs(sv.variants) do
           local is_current = (state.current.spec_name == rt.spec.name)
             and (state.current.theme == theme)
-          local marker = is_current and icons.current or ' '
+          local is_preview = state.ui.previewed
+            and state.ui.previewed.spec_name == rt.spec.name
+            and state.ui.previewed.theme == theme
+          local marker = ' '
+          local marker_group = 'AtelierCurrent'
+          local name_group = 'AtelierTheme'
+          if is_preview then
+            marker = icons.preview
+            marker_group = 'AtelierPreview'
+            name_group = 'AtelierPreview'
+          elseif is_current then
+            marker = icons.current
+            name_group = 'AtelierCurrent'
+          end
           local left = '    ' .. marker .. ' ' .. theme
           local bg = M.background_of(rt.spec, theme)
           local right = ''
@@ -253,9 +287,8 @@ function M.render(state, width, height, hovered)
           local idx = #lines
 
           local marker_start = 4
-          hl('AtelierCurrent', idx, marker_start, marker_start + #marker)
+          hl(marker_group, idx, marker_start, marker_start + #marker)
           local name_start = marker_start + #marker + 1
-          local name_group = is_current and 'AtelierCurrent' or 'AtelierTheme'
           hl(name_group, idx, name_start, name_start + #theme)
           if right ~= '  ' then
             local suffix_start = #line - #right
@@ -264,6 +297,10 @@ function M.render(state, width, height, hovered)
         end
       end
     end
+  end
+  if visible_variants == 0 then
+    push('    No finishes match this filter.', { kind = 'info' })
+    hl('AtelierSubtle', #lines, 4, -1)
   end
 
   -- Pad body to budget for stable footer position.
@@ -276,7 +313,17 @@ function M.render(state, width, height, hovered)
   hl('AtelierDivider', #lines, 2, -1)
 
   local info_line = '  '
-  if hovered and hovered.kind == 'theme' and hovered.rt then
+  if state.operation then
+    local op = state.operation
+    info_line = ('  %s · %d/%d complete%s'):format(
+      op.kind:upper(), op.completed, op.total,
+      op.failed > 0 and (' · %d failed'):format(op.failed) or '')
+  elseif state.ui.previewed then
+    local active = state.ui.previewed
+    info_line = ('  PREVIEW · %s · Enter apply · Esc restore'):format(active.theme)
+  elseif state.ui.message then
+    info_line = '  ' .. state.ui.message
+  elseif hovered and hovered.kind == 'theme' and hovered.rt then
     local bg = M.background_of(hovered.rt.spec, hovered.theme)
     local bg_part = bg and (' ' .. icons.sep .. ' ' .. bg) or ''
     local status = hovered.rt.status
@@ -319,9 +366,9 @@ function M.render(state, width, height, hovered)
     footer_line = '  type to filter ' .. icons.sep .. ' <CR> apply ' .. icons.sep .. ' <Esc> cancel'
     keycaps = { '<CR>', '<Esc>' }
   else
-    footer_line = '  <Space> preview ' .. icons.sep .. ' <CR> set ' .. icons.sep
-      .. ' h/l fold ' .. icons.sep .. ' / filter ' .. icons.sep .. ' t bg ' .. icons.sep .. ' q'
-    keycaps = { '<Space>', '<CR>', 'h/l', '/', 't', 'q' }
+    footer_line = '  <Space> preview ' .. icons.sep .. ' <CR> apply ' .. icons.sep
+      .. ' h/l fold ' .. icons.sep .. ' / filter ' .. icons.sep .. ' b bg ' .. icons.sep .. ' ? actions'
+    keycaps = { '<Space>', '<CR>', 'h/l', '/', 'b', '?' }
   end
   push(footer_line, { kind = 'footer' })
   local footer_idx = #lines

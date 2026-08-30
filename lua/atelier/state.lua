@@ -20,6 +20,15 @@
 ---@field filter string                  Current filter query (lowercased). Empty = no filter.
 ---@field mode 'normal'|'filter'         Picker input mode.
 ---@field collapsed_default boolean      What `expanded` defaults to when a new spec runtime is created.
+---@field previewed atelier.Current|nil  Theme currently previewed but not applied.
+---@field help boolean                   Whether the workshop help card is open.
+---@field message string|nil             Short-lived operation/result message.
+
+---@class atelier.Operation
+---@field kind 'install'|'update'
+---@field completed integer
+---@field total integer
+---@field failed integer
 
 ---@class atelier.State
 ---@field config atelier.Config
@@ -29,6 +38,7 @@
 ---@field current atelier.Current
 ---@field last_good atelier.Current          Persisted snapshot for restore-on-cancel and crash recovery.
 ---@field ui atelier.UiState                  Picker UI state. Reset on each picker open.
+---@field operation atelier.Operation|nil     Aggregate install/update progress.
 
 local Bus = require('atelier.events')
 
@@ -44,10 +54,14 @@ function M.new(config)
     by_name = {},
     current = { spec_name = nil, theme = nil, background = nil },
     last_good = { spec_name = nil, theme = nil, background = nil },
+    operation = nil,
     ui = {
       filter = '',
       mode = 'normal',
       collapsed_default = true, -- folded by default; l to unfold, h to fold
+      previewed = nil,
+      help = false,
+      message = nil,
     },
   }
 
@@ -75,6 +89,9 @@ end
 function M.reset_ui(state)
   state.ui.filter = ''
   state.ui.mode = 'normal'
+  state.ui.previewed = nil
+  state.ui.help = false
+  state.ui.message = nil
 end
 
 ---Find a runtime entry by user-facing name.

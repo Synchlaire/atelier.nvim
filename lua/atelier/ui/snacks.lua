@@ -7,46 +7,6 @@
 --
 local M = {}
 
-local function snapshot_current(current)
-  return {
-    spec_name = current.spec_name,
-    theme = current.theme,
-    background = current.background,
-  }
-end
-
----@param state atelier.State
----@param item { spec_name: string, theme: string, rt: atelier.ThemeRuntime }
----@param snapshot_background 'dark'|'light'
----@return boolean ok, string? err
-function M.commit(state, item, snapshot_background)
-  local Loader = require('atelier.loader')
-  local ok, err = Loader.load(item.rt.spec, item.theme, state.config.on_load)
-  if not ok then
-    return false, err
-  end
-
-  local background = nil
-  if
-    Loader.declared_background(item.rt.spec, item.theme)
-    or vim.o.background ~= snapshot_background
-  then
-    background = vim.o.background
-  end
-
-  state.current = {
-    spec_name = item.spec_name,
-    theme = item.theme,
-    background = background,
-  }
-  state.last_good = snapshot_current(state.current)
-  if state.config.persist then
-    require('atelier.persist').write(state.config.data_dir, state.current)
-  end
-  state.bus:emit('state_changed')
-  return true
-end
-
 ---@param state atelier.State
 ---@return { name: string, spec_name: string, theme: string, rt: atelier.ThemeRuntime }[]
 local function build_items(state)
@@ -69,9 +29,8 @@ end
 
 ---Open snacks.picker if available; falls back to inline filter otherwise.
 ---@param window atelier.Window
----@param close_picker fun()|nil  Called after a successful selection so the
----                               atelier window can close behind the snacks UI.
-function M.open(window, close_picker)
+---@param preview atelier.Preview
+function M.open(window, preview)
   local state = window.state
   local ok, snacks = pcall(require, 'snacks')
   if not ok or not snacks.picker then
@@ -81,8 +40,8 @@ function M.open(window, close_picker)
   end
 
   local items = build_items(state)
-  local Loader = require('atelier.loader')
-  local snapshot_background = vim.o.background
+  local handoff = preview:visual_snapshot()
+  local confirmed = false
 
   snacks.picker.pick({
     source = 'atelier',
@@ -100,22 +59,23 @@ function M.open(window, close_picker)
     preview = function(ctx)
       local item = ctx.item
       if item and item.rt and item.rt.status == 'installed' then
-        pcall(Loader.load, item.rt.spec, item.theme, nil)
+        preview:preview_item(item)
       end
       return false -- we don't render anything in the preview pane
     end,
     confirm = function(picker, item)
-      picker:close()
       if not item or not item.rt or item.rt.status ~= 'installed' then
         return
       end
-      local ok2, err = M.commit(state, item, snapshot_background)
-      if not ok2 then
-        vim.notify('[atelier] ' .. tostring(err), vim.log.levels.ERROR)
-        return
+      if preview:commit_item(item) then
+        confirmed = true
+        picker:close()
+        window:close()
       end
-      if close_picker then
-        close_picker()
+    end,
+    on_close = function()
+      if not confirmed then
+        preview:restore_visual(handoff)
       end
     end,
   })

@@ -5,6 +5,8 @@ A small, fast colorscheme manager for Neovim.
 - Parallel install/update (no serial pipeline)
 - Pure-function picker with diffed redraws (no flicker)
 - Explicit `<Space>` preview that restores on cancel
+- Distinct preview/applied states with visible operation progress
+- Recoverable cleanup: unused themes are archived, never silently deleted
 - Tiny config schema, callback-based escape hatches
 - Single explicit `State` table — no module-level globals
 
@@ -77,7 +79,7 @@ require('atelier').setup({
 | `:Atelier`        | Open the picker                 |
 | `:Atelier install`| Install all missing themes      |
 | `:Atelier update` | Update all installed themes     |
-| `:Atelier clean`  | Remove themes no longer in your config |
+| `:Atelier clean`  | Archive themes no longer in your config under `sites/trash/` |
 
 ## Picker keys
 
@@ -93,8 +95,9 @@ The picker groups themes by spec. Each group has a header (`▾`/`▸`) you can 
 | `/`                 | Inline filter — type to narrow live, `<Esc>` clears   |
 | `<C-/>`             | Hand off to `snacks.picker` (falls back to inline `/`) |
 | `q` / `<Esc>`       | Close (or clear filter if one is active)              |
-| `B`                 | Toggle `vim.o.background` between dark and light      |
-| `I` / `U` / `C`     | Install missing / update all / clean unused           |
+| `b`                 | Preview the paired dark/light variant (`B` and `t` remain aliases) |
+| `?`                 | Show the workshop action reference                    |
+| `I` / `U` / `C`     | Install missing / update all / archive unused         |
 | `R`                 | Force redraw                                          |
 
 Filtering force-expands any spec whose name or variants match, so a search like `/dark` immediately surfaces every dark variant across every group.
@@ -103,7 +106,7 @@ Filtering force-expands any spec whose name or variants match, so a search like 
 
 Atelier never guesses whether a colorscheme is dark or light. If you want it to know, declare it on the spec via `background = 'dark' | 'light'` (or per-variant via `backgrounds = { variant_name = 'dark' }`). When set, atelier writes `vim.o.background` before calling `:colorscheme`, so colorschemes that branch on `vim.o.background` get the right value at load time. Declared backgrounds are shown as a `· dark` / `· light` suffix on each variant row in the picker.
 
-Pressing `B` flips the mode. If the *current* spec has a paired variant declared in the opposite mode (e.g. `backgrounds = { ['tokyonight-day'] = 'light', ['tokyonight-night'] = 'dark' }`), atelier switches to it directly — colorscheme and background flip together. Otherwise it just sets `vim.o.background` and re-renders.
+Pressing `b` previews the opposite mode. If the active spec has a paired variant declared in that mode (e.g. `backgrounds = { ['tokyonight-day'] = 'light', ['tokyonight-night'] = 'dark' }`), atelier previews that variant directly. Otherwise it previews the background change on the current colorscheme. Press `<CR>` to apply and persist it; closing the picker restores the original theme and background.
 
 The committed background is persisted alongside the theme name, so the next session restores it before `:colorscheme` runs.
 
@@ -125,6 +128,8 @@ atelier.on('state_changed', function() ... end)
 ```
 
 Events: `state_changed`, `install_finished`, `update_finished`, `clean_finished`.
+
+`atelier.clean()` moves unknown theme directories into a timestamped directory under `<data_dir>/sites/trash/`. The picker asks for confirmation and lists every affected theme first.
 
 ## Development
 
