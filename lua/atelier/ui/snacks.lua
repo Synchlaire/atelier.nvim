@@ -7,6 +7,46 @@
 --
 local M = {}
 
+local function snapshot_current(current)
+  return {
+    spec_name = current.spec_name,
+    theme = current.theme,
+    background = current.background,
+  }
+end
+
+---@param state atelier.State
+---@param item { spec_name: string, theme: string, rt: atelier.ThemeRuntime }
+---@param snapshot_background 'dark'|'light'
+---@return boolean ok, string? err
+function M.commit(state, item, snapshot_background)
+  local Loader = require('atelier.loader')
+  local ok, err = Loader.load(item.rt.spec, item.theme, state.config.on_load)
+  if not ok then
+    return false, err
+  end
+
+  local background = nil
+  if
+    Loader.declared_background(item.rt.spec, item.theme)
+    or vim.o.background ~= snapshot_background
+  then
+    background = vim.o.background
+  end
+
+  state.current = {
+    spec_name = item.spec_name,
+    theme = item.theme,
+    background = background,
+  }
+  state.last_good = snapshot_current(state.current)
+  if state.config.persist then
+    require('atelier.persist').write(state.config.data_dir, state.current)
+  end
+  state.bus:emit('state_changed')
+  return true
+end
+
 ---@param state atelier.State
 ---@return { name: string, spec_name: string, theme: string, rt: atelier.ThemeRuntime }[]
 local function build_items(state)
@@ -42,7 +82,7 @@ function M.open(window, close_picker)
 
   local items = build_items(state)
   local Loader = require('atelier.loader')
-  local Persist = require('atelier.persist')
+  local snapshot_background = vim.o.background
 
   snacks.picker.pick({
     source = 'atelier',
@@ -55,7 +95,8 @@ function M.open(window, close_picker)
         { '(' .. item.spec_name .. ')', 'AtelierSubtle' },
       }
     end,
-    -- Live preview as the user moves through results.
+    -- Live preview as the user moves through results. The built-in picker
+    -- previews explicitly with <Space>; Snacks owns its own cursor-driven UI.
     preview = function(ctx)
       local item = ctx.item
       if item and item.rt and item.rt.status == 'installed' then
@@ -65,19 +106,17 @@ function M.open(window, close_picker)
     end,
     confirm = function(picker, item)
       picker:close()
-      if not item or not item.rt or item.rt.status ~= 'installed' then return end
-      local ok2, err = Loader.load(item.rt.spec, item.theme, state.config.on_load)
+      if not item or not item.rt or item.rt.status ~= 'installed' then
+        return
+      end
+      local ok2, err = M.commit(state, item, snapshot_background)
       if not ok2 then
         vim.notify('[atelier] ' .. tostring(err), vim.log.levels.ERROR)
         return
       end
-      state.current = { spec_name = item.spec_name, theme = item.theme }
-      state.last_good = state.current
-      if state.config.persist then
-        Persist.write(state.config.data_dir, state.current)
+      if close_picker then
+        close_picker()
       end
-      state.bus:emit('state_changed')
-      if close_picker then close_picker() end
     end,
   })
 end

@@ -19,7 +19,7 @@
 ---@field themes atelier.ThemeSpec[]
 ---@field install_on_setup boolean
 ---@field parallel integer
----@field preview_delay_ms integer
+---@field preview_delay_ms integer Deprecated compatibility option; the built-in picker previews explicitly with <Space>.
 ---@field persist boolean
 ---@field activity boolean
 ---@field data_dir string
@@ -32,7 +32,7 @@ M.defaults = {
   themes = {},
   install_on_setup = false,
   parallel = 4,
-  preview_delay_ms = 120,
+  preview_delay_ms = 120, -- deprecated; retained so existing configs keep normalizing cleanly
   persist = true,
   activity = false,
   data_dir = '', -- resolved in normalize() so tests can stub vim.fn.stdpath

@@ -4,7 +4,7 @@ A small, fast colorscheme manager for Neovim.
 
 - Parallel install/update (no serial pipeline)
 - Pure-function picker with diffed redraws (no flicker)
-- Debounced hover preview that restores on cancel
+- Explicit `<Space>` preview that restores on cancel
 - Tiny config schema, callback-based escape hatches
 - Single explicit `State` table — no module-level globals
 
@@ -18,7 +18,7 @@ With lazy.nvim:
 
 ```lua
 {
-  'atelier.nvim',
+  'Synchlaire/atelier.nvim',
   lazy = false,
   priority = 1000,
   opts = {
@@ -60,7 +60,6 @@ require('atelier').setup({
 
   install_on_setup = false,   -- if true, missing themes auto-clone on setup()
   parallel = 4,               -- worker pool size for git ops
-  preview_delay_ms = 120,     -- debounce for hover preview
   persist = true,             -- remember the last theme across sessions
   activity = false,           -- (reserved) usage tracking
   data_dir = nil,             -- defaults to stdpath('data')/atelier
@@ -87,6 +86,7 @@ The picker groups themes by spec. Each group has a header (`▾`/`▸`) you can 
 | Key                 | Action                                                |
 |---------------------|-------------------------------------------------------|
 | `<CR>`              | Commit the previewed theme (or toggle fold on a header) |
+| `<Space>`           | Preview the theme under the cursor without committing   |
 | `<Tab>`             | Toggle fold under the cursor                          |
 | `zo` / `zc`         | Open / close fold                                     |
 | `zR` / `zM`         | Expand all / collapse all                             |
@@ -125,6 +125,14 @@ atelier.on('state_changed', function() ... end)
 ```
 
 Events: `state_changed`, `install_finished`, `update_finished`, `clean_finished`.
+
+## Development
+
+Run the regression suite from the repository root:
+
+```sh
+nvim --clean --headless -u NONE -l tests/run.lua
+```
 
 ## License
 

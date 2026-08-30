@@ -38,8 +38,16 @@ function M.setup(user)
         local Loader = require('atelier.loader')
         local ok = Loader.load(rt.spec, persisted.theme, config.on_load)
         if ok then
-          state.current = persisted
-          state.last_good = persisted
+          state.current = {
+            spec_name = persisted.spec_name,
+            theme = persisted.theme,
+            background = persisted.background,
+          }
+          state.last_good = {
+            spec_name = persisted.spec_name,
+            theme = persisted.theme,
+            background = persisted.background,
+          }
           state.bus:emit('state_changed')
         end
       end
