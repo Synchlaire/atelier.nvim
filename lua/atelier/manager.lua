@@ -32,11 +32,10 @@ end
 ---@param dir string
 local function add_to_rtp(dir)
   if not dir then return end
-  -- vim.opt.rtp:prepend deduplicates internally? No — guard manually.
-  local current = vim.api.nvim_get_option_value('runtimepath', {})
-  if not current:find(dir, 1, true) then
-    vim.opt.rtp:prepend(dir)
+  for _, path in ipairs(vim.opt.rtp:get()) do
+    if path == dir then return end
   end
+  vim.opt.rtp:prepend(dir)
 end
 
 ---Walk all themes and update their `status` field based on disk state.

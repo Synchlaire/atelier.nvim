@@ -127,4 +127,63 @@ test('clean archives unknown theme directories', function()
   vim.fn.delete(temp, 'rf')
 end)
 
+test('git continuations run outside fast events', function()
+  local called = false
+  require('atelier.git').run({ 'git', '--version' }, nil, function(result)
+    assert(result.ok, result.stderr)
+    assert(not vim.in_fast_event())
+    -- This is the API that failed when the callback ran in a fast event.
+    assert(vim.api.nvim_get_option_value('runtimepath', {}) ~= '')
+    called = true
+  end)
+  assert(vim.wait(5000, function() return called end, 10), 'git callback timed out')
+end)
+
+test('install and update a local theme repository', function()
+  local temp = vim.fn.tempname()
+  local source = vim.fs.joinpath(temp, 'source')
+  vim.fn.mkdir(vim.fs.joinpath(source, 'colors'), 'p')
+  vim.fn.writefile({ 'hi clear' }, vim.fs.joinpath(source, 'colors', 'sample.vim'))
+
+  local function git(args)
+    local output = vim.fn.system(vim.list_extend({ 'git', '-C', source }, args))
+    assert(vim.v.shell_error == 0, output)
+  end
+
+  git({ 'init', '-q' })
+  git({ 'add', '.' })
+  git({ '-c', 'user.name=Atelier Test', '-c', 'user.email=atelier@example.invalid',
+    'commit', '-qm', 'initial theme' })
+
+  local spec = { name = 'sample', url = source }
+  local rt = { spec = spec, status = 'unknown' }
+  local state = {
+    config = { data_dir = vim.fs.joinpath(temp, 'data'), parallel = 1 },
+    themes = { rt },
+    ui = {},
+    bus = { emit = function() end },
+  }
+  local manager = require('atelier.manager')
+  local installed = false
+  manager.install_missing(state, function() installed = true end)
+  assert(vim.wait(5000, function() return installed end, 10), 'install timed out')
+  eq(rt.status, 'installed')
+  local dest = manager.dir_for(state, spec)
+  assert(vim.fn.filereadable(vim.fs.joinpath(dest, 'colors', 'sample.vim')) == 1)
+  local occurrences = 0
+  for _, path in ipairs(vim.opt.rtp:get()) do
+    if path == dest then occurrences = occurrences + 1 end
+  end
+  eq(occurrences, 1)
+
+  local updated = false
+  manager.update_all(state, function() updated = true end)
+  assert(vim.wait(5000, function() return updated end, 10), 'update timed out')
+  eq(rt.status, 'installed')
+  eq(state.operation, nil)
+
+  vim.opt.rtp:remove(dest)
+  vim.fn.delete(temp, 'rf')
+end)
+
 print(('atelier: %d tests passed'):format(passed))

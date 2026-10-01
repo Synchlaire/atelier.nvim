@@ -1,6 +1,6 @@
 -- Thin async wrapper around vim.system for the git operations atelier needs.
 -- Each function takes an `on_done(result)` callback so jobs.lua can drive
--- them from a worker pool. No coroutines, no callback chains.
+-- them from a worker pool. Completions run on Neovim's main loop.
 --
 ---@class atelier.GitResult
 ---@field ok boolean
@@ -12,15 +12,14 @@
 local M = {}
 
 ---@param cmd string[]
----@param opts { cwd?: string, on_progress?: fun(line: string) }|nil
+---@param opts { cwd?: string }|nil
 ---@param on_done fun(result: atelier.GitResult)
 function M.run(cmd, opts, on_done)
   opts = opts or {}
 
-  -- vim.system stderr/stdout collection. We capture everything and let the
-  -- caller pull out a progress signal from the buffered text if it wants;
-  -- streaming progress per-line is more complexity than v1 needs and only
-  -- matters during clone.
+  -- Collect stdout/stderr for the caller. vim.system invokes this callback
+  -- in a fast event, so any continuation that touches Neovim state must be
+  -- scheduled before it runs.
   local sysopts = {
     cwd = opts.cwd,
     text = true,
@@ -35,13 +34,13 @@ function M.run(cmd, opts, on_done)
       stderr = obj.stderr or '',
       cmd = cmd,
     }
-    on_done(result)
+    vim.schedule(function() on_done(result) end)
   end)
 end
 
 ---@param url string
 ---@param dest string
----@param opts { branch?: string, on_progress?: fun(line: string) }|nil
+---@param opts { branch?: string }|nil
 ---@param on_done fun(result: atelier.GitResult)
 function M.clone(url, dest, opts, on_done)
   opts = opts or {}
@@ -52,7 +51,7 @@ function M.clone(url, dest, opts, on_done)
   end
   cmd[#cmd + 1] = url
   cmd[#cmd + 1] = dest
-  M.run(cmd, { on_progress = opts.on_progress }, on_done)
+  M.run(cmd, nil, on_done)
 end
 
 ---@param dir string
