@@ -120,35 +120,11 @@ function M.attach(window, preview)
   map('<C-/>', snacks_open, 'atelier: snacks search')
   map('<C-_>', snacks_open, 'atelier: snacks search') -- terminal alias
 
-  -- Flip background mode. If the current spec has a variant declared in
-  -- the *target* mode (via `background` or `backgrounds = {...}`), switch
-  -- to it — that's the only safe way to avoid leaving a dark colorscheme
-  -- on a light background. Otherwise just flip vim.o.background and let
-  -- the user pick from the now-sorted Light/Dark sections.
+  window.on_mode = function(mode) return preview:set_mode(mode) end
   local function toggle_background()
-    local s = window.state
-    local target_mode = (vim.o.background == 'dark') and 'light' or 'dark'
-    local active = s.ui.previewed or s.current
-
-    if active.spec_name then
-      local rt = s.by_name[active.spec_name]
-      if rt then
-        local variant = Picker.find_variant_for(rt.spec, target_mode)
-        if variant then
-          preview:preview_item({
-            spec_name = rt.spec.name,
-            theme = variant,
-            rt = rt,
-          })
-          return
-        end
-      end
-    end
-
-    vim.o.background = target_mode
-    s.ui.message = ('Background preview · %s · Enter apply or Esc restore.'):format(target_mode)
-    window:render()
+    preview:set_mode(vim.o.background == 'dark' and 'light' or 'dark')
   end
+  map('a', function() preview:set_mode('auto') end, 'atelier: preview automatic mode')
   map('b', toggle_background, 'atelier: toggle background')
   map('B', toggle_background, 'atelier: toggle background (alias)')
   map('t', toggle_background, 'atelier: toggle background (alias)')

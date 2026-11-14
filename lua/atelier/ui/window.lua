@@ -11,15 +11,22 @@ local NS = vim.api.nvim_create_namespace('atelier.picker')
 local LIST_W = 80
 local LIST_H = 28
 
-local function desired_height(state)
+local Controls = require('atelier.ui.volt')
+
+---Currently open window (module singleton): reopening closes it first.
+---@type atelier.Window|nil
+local current
+
+local function desired_height(state, control_rows)
   local Manager = require('atelier.manager')
-  local rows = 7
+  local rows = 7 + control_rows
   for _, rt in ipairs(state.themes) do
     rows = rows + 1
     if rt.status == 'failed' and rt.error then rows = rows + 1 end
     if rt.expanded then rows = rows + math.max(1, #Manager.discover(state, rt)) end
   end
-  return math.max(12, math.min(LIST_H, rows))
+  -- The picker never renders fewer than 4 body rows; keep the whole strip visible.
+  return math.max(7 + control_rows + 4, math.min(LIST_H, rows))
 end
 
 ---@class atelier.Window
@@ -33,33 +40,60 @@ end
 ---@field hovered_row atelier.PickerRow|nil
 ---@field on_close fun()|nil
 ---@field on_cursor fun(row: atelier.PickerRow|nil)|nil
+---@field on_mode fun(mode: 'light'|'dark'|'auto'): boolean|nil  set by the owner; Light/Dark/Auto controls call it
+---@field volt boolean  true when the control strip is drawn by Volt (clickable)
 ---@field private _bus_listener fun()
 ---@field private _closed boolean
 local Window = {}
 Window.__index = Window
 
 ---@param state atelier.State
+---@param control_rows integer
+---@return integer width, integer height, integer row, integer col
+local function layout(state, control_rows)
+  local width = math.max(1, math.min(LIST_W, math.floor(vim.o.columns * 0.8)))
+  local height = math.max(1, math.min(desired_height(state, control_rows), math.floor(vim.o.lines * 0.8)))
+  return width, height,
+    math.max(0, math.floor((vim.o.lines - height) / 2)),
+    math.max(0, math.floor((vim.o.columns - width) / 2))
+end
+
+---@return atelier.Window|nil
+function M.get() return current end
+
+---@param state atelier.State
 ---@return atelier.Window
 function M.open(state)
-  local width = math.min(LIST_W, math.floor(vim.o.columns * 0.8))
-  local height = math.min(desired_height(state), math.floor(vim.o.lines * 0.8))
+  if current then
+    current:close()
+    current = nil
+  end
+
+  -- Volt is required lazily, only when a picker opens.
+  local volt = Controls.load()
+  local control_rows = Controls.row_count(volt ~= nil)
+  local width, height, row, col = layout(state, control_rows)
 
   local buf = vim.api.nvim_create_buf(false, true)
   vim.api.nvim_set_option_value('bufhidden', 'wipe', { buf = buf })
   vim.api.nvim_set_option_value('buftype', 'nofile', { buf = buf })
   vim.api.nvim_set_option_value('filetype', 'atelier', { buf = buf })
 
-  local win = vim.api.nvim_open_win(buf, true, {
+  local win_ok, win = pcall(vim.api.nvim_open_win, buf, true, {
     relative = 'editor',
     width = width,
     height = height,
-    row = math.floor((vim.o.lines - height) / 2),
-    col = math.floor((vim.o.columns - width) / 2),
+    row = row,
+    col = col,
     style = 'minimal',
     border = 'single',
     title = ' ATELIER · WORKSHOP ',
     title_pos = 'center',
   })
+  if not win_ok then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    error('atelier: could not open the workshop window: ' .. tostring(win), 0)
+  end
 
   vim.api.nvim_set_option_value('cursorline', true, { win = win })
   vim.api.nvim_set_option_value('wrap', false, { win = win })
@@ -75,31 +109,54 @@ function M.open(state)
     height = height,
     state = state,
     rows = {},
-    prev_lines = {},
+    prev_lines = { '' }, -- a fresh buffer holds one empty line
     hovered_row = nil,
     on_close = nil,
     on_cursor = nil,
+    on_mode = nil,
+    volt = volt ~= nil,
+    control_rows = control_rows,
     _closed = false,
   }, Window)
+  current = self
 
-  vim.api.nvim_create_autocmd('CursorMoved', {
-    buffer = buf,
-    callback = function()
-      if self._closed then return end
-      local row = self:current_row()
-      self.hovered_row = row
-      if self.on_cursor then self.on_cursor(row) end
-    end,
-  })
+  -- Anything below can raise (Volt attach, autocmds). Never leave a
+  -- half-built float behind: tear it down and surface a clear error.
+  local ok, err = pcall(function()
+    if volt then Controls.attach(self, volt) end
 
-  vim.api.nvim_create_autocmd('BufWipeout', {
-    buffer = buf,
-    once = true,
-    callback = function() self:_dispose() end,
-  })
+    self._group = vim.api.nvim_create_augroup('atelier.window.' .. buf, { clear = true })
+    vim.api.nvim_create_autocmd('VimResized', {
+      group = self._group,
+      callback = function() self:resize() end,
+    })
 
-  self._bus_listener = function() self:render() end
-  state.bus:on('state_changed', self._bus_listener)
+    vim.api.nvim_create_autocmd('CursorMoved', {
+      buffer = buf,
+      callback = function()
+        if self._closed then return end
+        local row = self:current_row()
+        self.hovered_row = row
+        if self.on_cursor then self.on_cursor(row) end
+      end,
+    })
+
+    vim.api.nvim_create_autocmd('BufWipeout', {
+      buffer = buf,
+      once = true,
+      callback = function() self:_dispose() end,
+    })
+
+    self._bus_listener = function() self:render() end
+    state.bus:on('state_changed', self._bus_listener)
+  end)
+  if not ok then
+    self:_dispose()
+    pcall(vim.api.nvim_win_close, win, true)
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+    if current == self then current = nil end
+    error('atelier: could not set up the workshop window: ' .. tostring(err), 0)
+  end
 
   return self
 end
@@ -107,6 +164,12 @@ end
 function Window:_dispose()
   if self._closed then return end
   self._closed = true
+  if current == self then current = nil end
+  if self._group then
+    pcall(vim.api.nvim_del_augroup_by_id, self._group)
+    self._group = nil
+  end
+  Controls.detach(self)
   if self._bus_listener then
     self.state.bus:off('state_changed', self._bus_listener)
     self._bus_listener = nil
@@ -173,8 +236,70 @@ end
 function Window:render()
   if self._closed or not vim.api.nvim_buf_is_valid(self.buf) then return end
   local Picker = require('atelier.ui.picker')
-  local view = Picker.render(self.state, self.width, self.height, self.hovered_row)
+  local view = Picker.render(self.state, self.width, self.height, self.hovered_row, {
+    controls = Controls.model(self.state, self.width, { interactive = self.volt }),
+    interactive = self.volt,
+  })
   apply_diff(self, view)
+  if self.volt then Controls.draw(self, view) end
+end
+
+---Recompute geometry after the terminal changed size.
+function Window:resize()
+  if self._closed or not vim.api.nvim_win_is_valid(self.win) then return end
+  local width, height, row, col = layout(self.state, self.control_rows)
+  self.width, self.height = width, height
+  pcall(vim.api.nvim_win_set_config, self.win, {
+    relative = 'editor', width = width, height = height, row = row, col = col,
+  })
+  -- Widths changed: diff against the real buffer, not the cached lines.
+  self.prev_lines = vim.api.nvim_buf_get_lines(self.buf, 0, -1, false)
+  self:render()
+end
+
+---Ask the owner to switch the preview mode (Light/Dark/Auto).
+---@param mode 'light'|'dark'|'auto'
+---@return boolean
+function Window:set_mode(mode)
+  local state = self.state
+  local ok_call, ok = true, false
+  state.ui.message = nil
+  if self.on_mode then
+    ok_call, ok = pcall(self.on_mode, mode)
+    if not ok_call then
+      state.ui.message = ('Mode %s failed: %s'):format(mode, tostring(ok))
+      ok = false
+    end
+  else
+    state.ui.message = 'Mode preview is not available here.'
+  end
+  if ok ~= true and not state.ui.message then
+    state.ui.message = ('Cannot preview %s mode.'):format(mode)
+  end
+  state.bus:emit('state_changed')
+  return ok == true
+end
+
+---Run the buffer-local normal-mode mapping for `key`, so clickable actions
+---share the keyboard implementation.
+---@param key string
+---@return boolean
+function Window:invoke_key(key)
+  if self._closed or not vim.api.nvim_win_is_valid(self.win) then return false end
+  local map = vim.api.nvim_buf_call(self.buf, function()
+    return vim.fn.maparg(key, 'n', false, true)
+  end)
+  if type(map) ~= 'table' or type(map.callback) ~= 'function' then
+    self.state.ui.message = ('No action bound to %s.'):format(key)
+    self.state.bus:emit('state_changed')
+    return false
+  end
+  local ok, err = pcall(vim.api.nvim_win_call, self.win, map.callback)
+  if not ok then
+    self.state.ui.message = ('Action %s failed: %s'):format(key, tostring(err))
+    self.state.bus:emit('state_changed')
+  end
+  return ok
 end
 
 ---Re-render triggered by cursor move (info row depends on hovered_row).

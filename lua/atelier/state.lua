@@ -9,12 +9,15 @@
 ---@field error string|nil       First line of stderr if status == 'failed'.
 ---@field progress integer       0..100, only meaningful while installing/updating.
 ---@field themes string[]|nil    Cached list of theme names (from colors/*.lua|vim) once known.
+---@field activated boolean|nil   Provider was added to runtimepath on demand.
 ---@field expanded boolean       Picker UI state: is this spec's variant list visible.
 
 ---@class atelier.Current
 ---@field spec_name string|nil   Name of the spec that owns the active theme.
----@field theme string|nil       The actual `:colorscheme` value.
----@field background 'dark'|'light'|nil  The `vim.o.background` value at the time the theme was committed. nil if the user never declared one for this variant.
+---@field theme string|nil       The effective `:colorscheme` value.
+---@field choice string|nil      User-selected anchor, preserved across automatic variant changes.
+---@field background 'dark'|'light'|nil Effective background, also used as the offline Auto fallback.
+---@field mode 'auto'|'dark'|'light'|nil User preference, separate from the resolved background.
 
 ---@class atelier.UiState
 ---@field filter string                  Current filter query (lowercased). Empty = no filter.
@@ -38,6 +41,8 @@
 ---@field current atelier.Current
 ---@field last_good atelier.Current          Persisted snapshot for restore-on-cancel and crash recovery.
 ---@field ui atelier.UiState                  Picker UI state. Reset on each picker open.
+---@field desktop table                Appearance subscription and latest host preference.
+---@field preview atelier.Preview|nil   Active transaction; host changes are deferred while open.
 ---@field operation atelier.Operation|nil     Aggregate install/update progress.
 
 local Bus = require('atelier.events')
@@ -52,8 +57,9 @@ function M.new(config)
     bus = Bus.new(),
     themes = {},
     by_name = {},
-    current = { spec_name = nil, theme = nil, background = nil },
-    last_good = { spec_name = nil, theme = nil, background = nil },
+    current = { spec_name = nil, theme = nil, background = nil, mode = config.mode or 'auto' },
+    last_good = { spec_name = nil, theme = nil, background = nil, mode = config.mode or 'auto' },
+    desktop = { background = nil },
     operation = nil,
     ui = {
       filter = '',

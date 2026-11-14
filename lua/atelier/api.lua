@@ -7,9 +7,28 @@ local M = {}
 ---@type atelier.State|nil
 local state = nil
 
+local function finish_preview(s)
+  if not s.preview then return end
+  local windows = package.loaded['atelier.ui.window']
+  local window = windows and windows.get()
+  if window and window.state == s then
+    window:close()
+  else
+    s.preview:cleanup()
+  end
+end
+
 ---@param s atelier.State
 function M._bind(s)
+  if state then
+    finish_preview(state)
+    require('atelier.appearance').stop(state)
+  end
   state = s
+end
+
+function M._state()
+  return state
 end
 
 ---@return atelier.State
@@ -31,29 +50,18 @@ end
 ---@param theme string|nil
 function M.load(spec_name, theme)
   local s = require_state()
-  local rt = s.by_name[spec_name]
-  if not rt then
-    return false, 'unknown theme: ' .. spec_name
-  end
-  local Loader = require('atelier.loader')
-  local target = theme or rt.spec.name
-  local ok, err = Loader.load(rt.spec, target, s.config.on_load)
-  if ok then
-    -- Snapshot vim.o.background AFTER load: this captures both the
-    -- declared background (loader sets it) and any prior `B` toggle the
-    -- user committed via `<CR>`, while still recording nil for specs
-    -- that don't care.
-    local bg = nil
-    local declared = Loader.declared_background(rt.spec, target)
-    if declared then bg = vim.o.background end
-    s.current = { spec_name = spec_name, theme = target, background = bg }
-    s.last_good = { spec_name = spec_name, theme = target, background = bg }
-    if s.config.persist then
-      require('atelier.persist').write(s.config.data_dir, s.current)
-    end
-    s.bus:emit('state_changed')
-  end
-  return ok, err
+  finish_preview(s)
+  return require('atelier.selection').apply(s, spec_name, theme)
+end
+
+---Apply and remember Light, Dark or Auto for the current theme.
+function M.set_mode(mode)
+  local s = require_state()
+  finish_preview(s)
+  if not s.current.spec_name then return false, 'no active Atelier theme' end
+  return require('atelier.selection').apply(s, s.current.spec_name, s.current.choice or s.current.theme, {
+    mode = mode, strict_mode = true, background = s.current.background,
+  })
 end
 
 ---@return atelier.Current

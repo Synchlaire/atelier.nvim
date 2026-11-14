@@ -1,163 +1,134 @@
--- On-demand preview with restore-on-cancel.
---
--- Snapshots the user's current colorscheme when the picker opens. The
--- cursor no longer auto-previews on move — the user explicitly hits
--- <Space> to load the theme under the cursor, and <CR> to commit.
--- Closing the picker without committing restores the snapshot.
---
-local Loader = require('atelier.loader')
-
+-- Reversible selection transaction shared by the built-in and Snacks UIs.
+local Selection = require('atelier.selection')
 local M = {}
-
----@class atelier.Preview
----@field state atelier.State
----@field snapshot string|nil       :colorscheme value at picker-open time.
----@field snapshot_background 'dark'|'light'  vim.o.background at picker-open time.
----@field committed boolean         True once the user pressed <CR>.
----@field previewed_key string|nil  spec_name|theme of the last previewed row.
 local Preview = {}
 Preview.__index = Preview
 
----@param state atelier.State
----@return atelier.Preview
 function M.new(state)
   local self = setmetatable({
     state = state,
     snapshot = vim.g.colors_name,
     snapshot_background = vim.o.background,
+    mode = state.current.mode or state.config.mode or 'auto',
     committed = false,
     previewed_key = nil,
   }, Preview)
+  state.preview = self
+  require('atelier.appearance').reconcile(state)
   return self
 end
 
----Synchronously load the theme under the cursor as a preview. No debounce,
----no on_load hook. Called from the <Space> keybind.
----@param row atelier.PickerRow|nil
----@return boolean
 function Preview:preview_now(row)
   if not row or row.kind ~= 'theme' or not row.rt then return false end
-  return self:preview_item({
-    spec_name = row.spec_name,
-    theme = row.theme,
-    rt = row.rt,
-  })
+  return self:preview_item(row)
 end
 
----@param item { spec_name: string, theme: string, rt: atelier.ThemeRuntime }
----@return boolean
-function Preview:preview_item(item)
-  if item.rt.status ~= 'installed' then
-    self.state.ui.message = item.rt.status == 'failed'
-      and ('Cannot preview %s — update or retry first.'):format(item.theme)
-      or ('%s is not installed — press I to install.'):format(item.theme)
-    self.state.bus:emit('state_changed')
-    return false
-  end
-
-  local key = item.spec_name .. '|' .. item.theme
-  if key == self.previewed_key then return false end
-
-  local ok, err = Loader.load(item.rt.spec, item.theme, nil)
+function Preview:preview_item(item, options)
+  if self.closed then return false end
+  options = options or {}
+  local choice = options.strict_mode and item.choice or item.theme
+  choice = choice or item.theme
+  local key = item.spec_name .. '|' .. choice .. '|' .. self.mode .. '|' .. tostring(options.strict_mode)
+  if key == self.previewed_key then return true end
+  local ok, result = Selection.load(self.state, item.spec_name, choice, {
+    mode = self.mode, strict_mode = options.strict_mode,
+    background = self.snapshot_background, hooks = false,
+  })
   if not ok then
-    self.state.ui.message = ('Preview failed: %s'):format(tostring(err))
+    self.state.ui.message = 'Preview failed: ' .. tostring(result)
     self.state.bus:emit('state_changed')
     return false
   end
-
   self.previewed_key = key
-  self.state.ui.previewed = {
-    spec_name = item.spec_name,
-    theme = item.theme,
-    background = vim.o.background,
-  }
+  self.mode = result.mode
+  self.state.ui.previewed = result
   self.state.ui.message = nil
-  self.state.bus:emit('state_changed')
-  return ok
-end
-
----Commit the currently-previewed theme as the active one. Persists.
----@param row atelier.PickerRow|nil
----@return boolean
-function Preview:commit(row)
-  if not row or row.kind ~= 'theme' or not row.rt then return false end
-  return self:commit_item({
-    spec_name = row.spec_name,
-    theme = row.theme,
-    rt = row.rt,
-  })
-end
-
----@param item { spec_name: string, theme: string, rt: atelier.ThemeRuntime }
----@return boolean
-function Preview:commit_item(item)
-  if item.rt.status ~= 'installed' then
-    self.state.ui.message = ('%s is not installed — press I to install.'):format(item.theme)
-    self.state.bus:emit('state_changed')
-    return false
-  end
-
-  local ok, err = Loader.load(item.rt.spec, item.theme, self.state.config.on_load)
-  if not ok then
-    self.state.ui.message = ('Apply failed: %s'):format(tostring(err))
-    self.state.bus:emit('state_changed')
-    return false
-  end
-
-  -- Capture vim.o.background only when something declared an opinion —
-  -- either the spec or a prior `B` toggle that changed it away from the
-  -- snapshot. nil means "atelier had no opinion, leave it alone".
-  local bg = nil
-  if Loader.declared_background(item.rt.spec, item.theme)
-    or vim.o.background ~= self.snapshot_background then
-    bg = vim.o.background
-  end
-
-  self.state.current = { spec_name = item.spec_name, theme = item.theme, background = bg }
-  self.state.last_good = vim.deepcopy(self.state.current)
-  self.committed = true
-  self.state.ui.previewed = nil
-  self.state.ui.message = ('Applied %s · saved to the bench.'):format(item.theme)
-  if self.state.config.persist then
-    require('atelier.persist').write(self.state.config.data_dir, self.state.current)
-  end
+  require('atelier.appearance').reconcile(self.state)
   self.state.bus:emit('state_changed')
   return true
 end
 
----Restore the snapshot if nothing was committed. Called from on_close.
-function Preview:cleanup()
-  self.state.ui.previewed = nil
-  if not self.committed then
-    -- Restore background BEFORE the colorscheme so colorschemes that
-    -- branch on it pick up the original mode at load time.
-    if vim.o.background ~= self.snapshot_background then
-      vim.o.background = self.snapshot_background
-    end
-    if self.snapshot and self.snapshot ~= vim.g.colors_name then
-      pcall(vim.cmd.colorscheme, self.snapshot)
-    end
+---A mode click/key previews; it does not persist until Enter.
+function Preview:set_mode(mode)
+  if mode ~= 'auto' and mode ~= 'dark' and mode ~= 'light' then return false end
+  local active = self.state.ui.previewed or self.state.current
+  if not active.spec_name then
+    self.state.ui.message = 'Preview a theme before choosing its mode.'
+    self.state.bus:emit('state_changed')
+    return false
   end
+  local previous_mode, previous_key = self.mode, self.previewed_key
+  self.mode = mode
+  self.previewed_key = nil
+  if self:preview_item(active, { strict_mode = true }) then return true end
+  self.mode, self.previewed_key = previous_mode, previous_key
+  return false
 end
 
----@return { theme: string|nil, background: 'dark'|'light', previewed: atelier.Current|nil, key: string|nil }
+function Preview:commit(row)
+  if not row or row.kind ~= 'theme' or not row.rt then return false end
+  return self:commit_item(row)
+end
+
+function Preview:commit_item(item)
+  if self.closed then return false end
+  local draft = self.state.ui.previewed or self.state.current
+  local applying_draft = draft and draft.spec_name == item.spec_name
+    and (item.theme == draft.choice or item.theme == draft.theme)
+  local choice = applying_draft and (draft.choice or draft.theme) or item.theme
+  local ok, result = Selection.load(self.state, item.spec_name, choice, {
+    mode = self.mode, strict_mode = applying_draft,
+    background = draft and draft.background or self.snapshot_background,
+  })
+  if not ok then
+    self.state.ui.message = 'Apply failed: ' .. tostring(result)
+    self.state.bus:emit('state_changed')
+    return false
+  end
+  self.committed = true
+  self.state.ui.message = ('Applied %s · %s%s.'):format(result.theme, result.mode,
+    self.state.config.persist and ' · saved' or '')
+  Selection.commit(self.state, result)
+  return true
+end
+
+function Preview:cleanup()
+  if self.closed then return end
+  self.closed = true
+  self.state.ui.previewed = nil
+  if not self.committed and (vim.g.colors_name ~= self.snapshot or vim.o.background ~= self.snapshot_background) then
+    Selection.restore(self.state, { theme = self.snapshot, background = self.snapshot_background })
+  end
+  if self.state.preview == self then self.state.preview = nil end
+  local Appearance = require('atelier.appearance')
+  Appearance.reconcile(self.state)
+  Appearance.sync(self.state)
+end
+
+function Preview:refresh_auto()
+  local draft = self.state.ui.previewed
+  if not draft or self.mode ~= 'auto' then return end
+  self.previewed_key = nil
+  self:preview_item(draft, { strict_mode = true })
+end
+
 function Preview:visual_snapshot()
   return {
     theme = vim.g.colors_name,
     background = vim.o.background,
     previewed = vim.deepcopy(self.state.ui.previewed),
     key = self.previewed_key,
+    mode = self.mode,
   }
 end
 
----@param snapshot { theme: string|nil, background: 'dark'|'light', previewed: atelier.Current|nil, key: string|nil }
 function Preview:restore_visual(snapshot)
-  vim.o.background = snapshot.background
-  if snapshot.theme and vim.g.colors_name ~= snapshot.theme then
-    pcall(vim.cmd.colorscheme, snapshot.theme)
-  end
+  if self.closed then return end
+  Selection.restore(self.state, snapshot)
   self.state.ui.previewed = snapshot.previewed
   self.previewed_key = snapshot.key
+  self.mode = snapshot.mode
+  require('atelier.appearance').reconcile(self.state)
   self.state.bus:emit('state_changed')
 end
 

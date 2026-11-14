@@ -2,10 +2,6 @@
 -- config.data_dir/sites/<name> and feeds jobs.lua. Mutates state.themes[i]
 -- entries and emits 'theme_changed' on the bus when statuses move.
 --
-local Git = require('atelier.git')
-local Jobs = require('atelier.jobs')
-local Loader = require('atelier.loader')
-
 local uv = vim.uv or vim.loop
 local M = {}
 
@@ -38,29 +34,37 @@ local function add_to_rtp(dir)
   vim.opt.rtp:prepend(dir)
 end
 
----Walk all themes and update their `status` field based on disk state.
----Pure inspection — no git, no I/O beyond fs_stat.
+---Inspect one provider without making it available on runtimepath.
+---@param state atelier.State
+---@param rt atelier.ThemeRuntime
+function M.refresh_entry(state, rt)
+  if rt.status == 'installing' or rt.status == 'updating' then return end
+  local dir = M.dir_for(state, rt.spec)
+  rt.status = (rt.spec.builtin or dir_exists(dir)) and 'installed' or 'missing'
+end
+
+---Inspection and installation never activate a provider.
 ---@param state atelier.State
 function M.refresh_status(state)
   for _, rt in ipairs(state.themes) do
-    if rt.status ~= 'installing' and rt.status ~= 'updating' then
-      local dir = M.dir_for(state, rt.spec)
-      if rt.spec.builtin then
-        rt.status = 'installed'
-      elseif rt.spec.local_path then
-        rt.status = dir_exists(dir) and 'installed' or 'missing'
-        if rt.status == 'installed' then add_to_rtp(dir) end
-      else
-        if dir_exists(dir) then
-          rt.status = 'installed'
-          add_to_rtp(dir)
-        else
-          rt.status = 'missing'
-        end
-      end
-    end
+    M.refresh_entry(state, rt)
   end
   state.bus:emit('state_changed')
+end
+
+---Activate only a provider that is about to be used. Previously used
+---providers stay on rtp: removing them would break cached Lua modules.
+---@param state atelier.State
+---@param rt atelier.ThemeRuntime
+---@return boolean, string?
+function M.activate(state, rt)
+  M.refresh_entry(state, rt)
+  if rt.status ~= 'installed' then
+    return false, rt.spec.name .. ' is not installed; run :Atelier install'
+  end
+  add_to_rtp(M.dir_for(state, rt.spec))
+  rt.activated = true
+  return true
 end
 
 ---@param rt atelier.ThemeRuntime
@@ -110,6 +114,8 @@ end
 ---@param state atelier.State
 ---@param on_finished fun()|nil
 function M.install_missing(state, on_finished)
+  local Git = require('atelier.git')
+  local Jobs = require('atelier.jobs')
   if operation_blocked(state) then return end
   M.refresh_status(state)
 
@@ -123,7 +129,6 @@ function M.install_missing(state, on_finished)
           set_status(rt, 'installing', state)
           Git.clone(rt.spec.url, dest, { branch = rt.spec.branch }, function(result)
             if result.ok then
-              add_to_rtp(dest)
               rt.themes = nil
               set_status(rt, 'installed', state)
               done(true, result)
@@ -162,6 +167,8 @@ end
 ---@param state atelier.State
 ---@param on_finished fun()|nil
 function M.update_all(state, on_finished)
+  local Git = require('atelier.git')
+  local Jobs = require('atelier.jobs')
   if operation_blocked(state) then return end
   M.refresh_status(state)
 
@@ -284,6 +291,8 @@ end
 function M.discover(state, rt)
   if rt.themes then return rt.themes end
   local dir = M.dir_for(state, rt.spec)
+  if dir and not dir_exists(dir) then return {} end
+  local Loader = require('atelier.loader')
   rt.themes = Loader.filter(Loader.discover_themes(dir), rt.spec)
   return rt.themes
 end

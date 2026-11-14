@@ -1,65 +1,64 @@
--- Read/write a tiny JSON file recording the last loaded theme. All I/O goes
--- through vim.uv so the main loop never blocks. The persisted shape is:
---   { spec_name = "tokyonight", theme = "tokyonight-night", background = "dark" }
--- `background` is optional and only present when the user declared one or
--- toggled via `B`. Anything unrecognized is silently dropped on read.
---
+-- Small synchronous state I/O, bounded on read and atomically replaced on
+-- write. Host events update only the effective-result cache; previews never write.
 local M = {}
-
 local uv = vim.uv or vim.loop
+local MAX_BYTES = 65536
 
----@param data_dir string
----@return string
 local function path(data_dir)
   return vim.fs.joinpath(data_dir, 'state.json')
 end
 
----@param data_dir string
-local function ensure_dir(data_dir)
-  -- mkdir -p; ignore "already exists".
-  vim.fn.mkdir(data_dir, 'p')
+local function background(value)
+  if value == 'dark' or value == 'light' then return value end
 end
 
----@param data_dir string
----@return atelier.Current
 function M.read(data_dir)
-  local p = path(data_dir)
-  local fd = uv.fs_open(p, 'r', 438)
-  if not fd then return { spec_name = nil, theme = nil } end
+  local fd = uv.fs_open(path(data_dir), 'r', 438)
+  if not fd then return {} end
   local stat = uv.fs_fstat(fd)
-  local raw = stat and uv.fs_read(fd, stat.size, 0) or ''
+  local raw = stat and stat.size <= MAX_BYTES and uv.fs_read(fd, stat.size, 0) or ''
   uv.fs_close(fd)
-  local ok, decoded = pcall(vim.json.decode, raw)
-  if not ok or type(decoded) ~= 'table' then
-    return { spec_name = nil, theme = nil }
-  end
-  local bg = decoded.background
-  if bg ~= 'dark' and bg ~= 'light' then bg = nil end
+  local ok, decoded = pcall(vim.json.decode, raw or '')
+  if not ok or type(decoded) ~= 'table' then return {} end
+  local bg = background(decoded.background)
+  local mode = decoded.mode
+  if mode ~= 'auto' and mode ~= 'dark' and mode ~= 'light' then mode = nil end
   return {
-    spec_name = type(decoded.spec_name) == 'string' and decoded.spec_name or nil,
-    theme = type(decoded.theme) == 'string' and decoded.theme or nil,
+    spec_name = type(decoded.spec_name) == 'string' and decoded.spec_name ~= '' and decoded.spec_name or nil,
+    theme = type(decoded.theme) == 'string' and decoded.theme ~= '' and decoded.theme or nil,
+    choice = type(decoded.choice) == 'string' and decoded.choice ~= '' and decoded.choice or nil,
     background = bg,
+    mode = mode,
   }
 end
 
----@param data_dir string
----@param current atelier.Current
+---@return boolean, string?
 function M.write(data_dir, current)
-  ensure_dir(data_dir)
+  local ok, err = pcall(vim.fn.mkdir, data_dir, 'p')
+  if not ok then return false, tostring(err) end
   local payload = vim.json.encode({
+    version = 2,
     spec_name = current.spec_name,
     theme = current.theme,
+    choice = current.choice,
     background = current.background,
+    mode = current.mode,
   })
-  -- Atomic-ish: write to a temp then rename so a crash mid-write can't leave
-  -- a half-written state.json behind.
   local p = path(data_dir)
-  local tmp = p .. '.tmp'
-  local fd = uv.fs_open(tmp, 'w', 420)
-  if not fd then return end
-  uv.fs_write(fd, payload, 0)
-  uv.fs_close(fd)
-  uv.fs_rename(tmp, p)
+  local fd, tmp = uv.fs_mkstemp(p .. '.XXXXXX')
+  if not fd then return false, tostring(tmp) end
+  local written, write_err = uv.fs_write(fd, payload, 0)
+  local closed, close_err = uv.fs_close(fd)
+  if written ~= #payload or not closed then
+    uv.fs_unlink(tmp)
+    return false, tostring(write_err or close_err or 'incomplete state write')
+  end
+  local renamed, rename_err = uv.fs_rename(tmp, p)
+  if not renamed then
+    uv.fs_unlink(tmp)
+    return false, tostring(rename_err)
+  end
+  return true
 end
 
 return M

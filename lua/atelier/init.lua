@@ -1,79 +1,51 @@
--- atelier.nvim entry point. setup() is the only thing that has to be called
--- before anything else; everything else is re-exported from api.lua.
---
+-- setup() restores only the active provider before the first editor render.
+-- The picker, other providers and desktop transport remain demand-loaded.
 local Config = require('atelier.config')
 local State = require('atelier.state')
 local Api = require('atelier.api')
-
 local M = {}
 
----@param user table|nil
 function M.setup(user)
   local config = Config.normalize(user)
   local state = State.new(config)
   Api._bind(state)
 
-  -- Make the picker discover real status without doing git or scans yet.
-  -- This is fs_stat-only and runs synchronously in setup, but it's cheap
-  -- (one stat per spec) and we need it before any of the other init steps
-  -- can do anything useful.
-  require('atelier.manager').refresh_status(state)
-
-  -- Persisted-theme load: defer to VimEnter so we don't fight the user's
-  -- config order. If we're already inside the editor (e.g. lazy reload),
-  -- run on next tick.
   if config.persist then
-    local function load_persisted()
-      local persisted = require('atelier.persist').read(config.data_dir)
-      if not persisted.spec_name then return end
+    local persisted = require('atelier.persist').read(config.data_dir)
+    if persisted.spec_name then
+      local Selection = require('atelier.selection')
+      local mode = persisted.mode or config.mode
       local rt = state.by_name[persisted.spec_name]
-      if rt and rt.status == 'installed' then
-        -- Restore the persisted background BEFORE Loader.load runs. The
-        -- loader will overwrite it if the spec declares a background for
-        -- this variant; otherwise the persisted value (e.g. from a `B`
-        -- toggle the user committed) survives.
-        if persisted.background then
-          vim.o.background = persisted.background
-        end
-        local Loader = require('atelier.loader')
-        local ok = Loader.load(rt.spec, persisted.theme, config.on_load)
-        if ok then
-          state.current = {
-            spec_name = persisted.spec_name,
-            theme = persisted.theme,
-            background = persisted.background,
-          }
-          state.last_good = {
-            spec_name = persisted.spec_name,
-            theme = persisted.theme,
-            background = persisted.background,
-          }
-          state.bus:emit('state_changed')
-        end
+      local choice = persisted.choice or persisted.theme
+      -- Legacy background was also saved from metadata, not just a user
+      -- toggle. Only an undeclared/different value denotes an override.
+      if not persisted.mode and persisted.background and rt
+        and require('atelier.loader').declared_background(rt.spec, choice or rt.spec.name) ~= persisted.background then
+        mode = persisted.background
       end
-    end
-
-    if vim.v.vim_did_enter == 1 then
-      vim.schedule(load_persisted)
-    else
-      vim.api.nvim_create_autocmd('VimEnter', {
-        once = true,
-        callback = load_persisted,
+      local ok, result = Selection.load(state, persisted.spec_name, choice, {
+        mode = mode, strict_mode = persisted.mode ~= nil, background = persisted.background,
       })
+      if ok then
+        Selection.commit(state, result, false)
+      else
+        -- Preserve the user's existing scheme and the saved state on disk.
+        local message = 'Could not restore selection: ' .. tostring(result)
+        state.ui.message = message
+        vim.schedule(function() vim.notify('[atelier] ' .. message, vim.log.levels.WARN) end)
+      end
     end
   end
 
   if config.install_on_setup then
-    -- Schedule so it doesn't block startup; the manager already runs git
-    -- async, but kicking it off from a scheduled callback keeps setup()
-    -- itself a no-op for the main loop.
     vim.schedule(function()
-      require('atelier.manager').install_missing(state)
+      if Api._state() == state then
+        require('atelier.manager').install_missing(state)
+      end
     end)
   end
 end
 
--- Re-export the public API so users don't have to know about api.lua.
 for k, v in pairs(Api) do
   if k:sub(1, 1) ~= '_' then M[k] = v end
 end

@@ -12,6 +12,7 @@
 ---@field after  fun(name: string)|nil  Per-spec hook fired after :colorscheme.
 ---@field local_path string|nil         If the spec is an absolute path, the path itself; manager skips git for these.
 ---@field builtin boolean               True if this is a Neovim built-in colorscheme (no install needed).
+---@field auto boolean               Explicit support for both vim.o.background values on the same colorscheme.
 ---@field background 'dark'|'light'|nil Optional declaration of which `:set background` value this spec expects. When set, the loader applies it before `:colorscheme`. Purely user-declared — atelier never guesses.
 ---@field backgrounds table<string, 'dark'|'light'>|nil  Per-variant override map keyed by variant name. Wins over `background` for the matched variant.
 
@@ -24,6 +25,8 @@
 ---@field activity boolean
 ---@field data_dir string
 ---@field on_load fun(name: string)|nil
+---@field mode 'auto'|'dark'|'light' Default preference when no saved mode exists.
+---@field desktop_provider table|nil Optional appearance provider with start(callback) -> stop.
 
 local M = {}
 
@@ -34,6 +37,7 @@ M.defaults = {
   parallel = 4,
   preview_delay_ms = 120, -- deprecated; retained so existing configs keep normalizing cleanly
   persist = true,
+  mode = 'auto',
   activity = false,
   data_dir = '', -- resolved in normalize() so tests can stub vim.fn.stdpath
   on_load = nil,
@@ -151,6 +155,7 @@ local function normalize_one(raw)
     url = nil,
     background = background,
     backgrounds = backgrounds,
+    auto = extra.auto == true,
   }
 
   if BUILTINS[source] then
@@ -202,6 +207,15 @@ function M.normalize(user)
     data_dir = vim.fs.joinpath(vim.fn.stdpath('data') --[[@as string]], 'atelier')
   end
 
+  local mode = user.mode or M.defaults.mode
+  if mode ~= 'auto' and mode ~= 'dark' and mode ~= 'light' then
+    error("[atelier] mode must be 'auto', 'dark' or 'light'")
+  end
+  if user.desktop_provider ~= nil
+    and (type(user.desktop_provider) ~= 'table' or type(user.desktop_provider.start) ~= 'function') then
+    error('[atelier] desktop_provider must provide start(callback) -> stop')
+  end
+
   ---@type atelier.Config
   local cfg = {
     themes = themes,
@@ -209,6 +223,8 @@ function M.normalize(user)
     parallel = math.max(1, tonumber(user.parallel) or M.defaults.parallel),
     preview_delay_ms = math.max(0, tonumber(user.preview_delay_ms) or M.defaults.preview_delay_ms),
     persist = user.persist ~= false,
+    mode = mode,
+    desktop_provider = user.desktop_provider,
     activity = user.activity == true,
     data_dir = data_dir,
     on_load = user.on_load,

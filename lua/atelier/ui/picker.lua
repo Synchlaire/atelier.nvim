@@ -5,7 +5,7 @@
 -- `h` folds. Navigation uses `j`/`k` to move through selectable rows.
 --
 ---@class atelier.PickerRow
----@field kind 'header'|'rule'|'filter'|'spec_header'|'theme'|'error'|'footer'|'info'|'spacer'
+---@field kind 'header'|'control'|'rule'|'filter'|'spec_header'|'theme'|'error'|'footer'|'info'|'spacer'
 ---@field spec_name string|nil
 ---@field theme string|nil
 ---@field rt atelier.ThemeRuntime|nil
@@ -14,6 +14,7 @@
 ---@field lines string[]
 ---@field highlights { line: integer, col_start: integer, col_end: integer, group: string }[]
 ---@field rows atelier.PickerRow[]
+---@field controls { first: integer, count: integer }|nil  buffer lines reserved for the control strip
 
 local Icons = require('atelier.ui.icons')
 local Manager = require('atelier.manager')
@@ -73,8 +74,10 @@ end
 ---@param width integer
 ---@param height integer
 ---@param hovered atelier.PickerRow|nil
+---@param opts { controls: table[][]|nil, interactive: boolean|nil }|nil  control strip model (see ui/volt.lua)
 ---@return atelier.PickerView
-function M.render(state, width, height, hovered)
+function M.render(state, width, height, hovered, opts)
+  opts = opts or {}
   local lines = {}
   local highlights = {}
   local rows = {}
@@ -82,6 +85,7 @@ function M.render(state, width, height, hovered)
   local filter = state.ui.filter
   width = width or 72
   height = height or 28
+  local chrome_rows = CHROME_ROWS
 
   local function push(line, row)
     lines[#lines + 1] = line
@@ -166,6 +170,26 @@ function M.render(state, width, height, hovered)
   hl('AtelierTitle', #lines, 2, 2 + #title)
   hl('AtelierSubtle', #lines, 2 + #title, -1)
 
+  -- Control strip. Interactive (Volt) strips reserve blank lines that Volt
+  -- draws over; otherwise the model is written as plain text.
+  local controls
+  if opts.controls and #opts.controls > 0 then
+    controls = { first = #lines + 1, count = #opts.controls }
+    for i, segs in ipairs(opts.controls) do
+      local text = ''
+      if opts.interactive then
+        push('', { kind = 'control', index = i })
+      else
+        for _, seg in ipairs(segs) do
+          hl(seg[2], #lines + 1, #text, #text + #seg[1])
+          text = text .. seg[1]
+        end
+        push(text, { kind = 'control', index = i })
+      end
+    end
+    chrome_rows = chrome_rows + #opts.controls
+  end
+
   push(rule_line(), { kind = 'rule' })
   hl('AtelierDivider', #lines, 2, -1)
 
@@ -187,7 +211,7 @@ function M.render(state, width, height, hovered)
   end
 
   -- ── body ─────────────────────────────────────────────────────────────
-  local body_budget = height - CHROME_ROWS
+  local body_budget = height - chrome_rows
   if body_budget < 4 then body_budget = 4 end
   local body_first_line = #lines + 1
 
@@ -318,11 +342,12 @@ function M.render(state, width, height, hovered)
     info_line = ('  %s · %d/%d complete%s'):format(
       op.kind:upper(), op.completed, op.total,
       op.failed > 0 and (' · %d failed'):format(op.failed) or '')
+  elseif state.ui.message then
+    -- Feedback (e.g. an unsupported mode) must stay visible while previewing.
+    info_line = '  ' .. state.ui.message
   elseif state.ui.previewed then
     local active = state.ui.previewed
     info_line = ('  PREVIEW · %s · Enter apply · Esc restore'):format(active.theme)
-  elseif state.ui.message then
-    info_line = '  ' .. state.ui.message
   elseif hovered and hovered.kind == 'theme' and hovered.rt then
     local bg = M.background_of(hovered.rt.spec, hovered.theme)
     local bg_part = bg and (' ' .. icons.sep .. ' ' .. bg) or ''
@@ -386,6 +411,7 @@ function M.render(state, width, height, hovered)
     lines = lines,
     highlights = highlights,
     rows = rows,
+    controls = controls,
   }
 end
 

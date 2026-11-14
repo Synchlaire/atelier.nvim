@@ -21,8 +21,9 @@ end
 ---@param spec atelier.ThemeSpec
 ---@param theme string|nil  Specific theme name to load (e.g. 'tokyonight-night'). nil = use spec.name.
 ---@param on_load fun(name: string)|nil  Global on_load hook from config.
+---@param background 'dark'|'light'|nil Resolved mode; takes precedence over metadata.
 ---@return boolean ok, string? err
-function M.load(spec, theme, on_load)
+function M.load(spec, theme, on_load, background)
   local target = theme or spec.name
 
   if spec.before then
@@ -35,7 +36,7 @@ function M.load(spec, theme, on_load)
   -- If the user declared a background for this variant, apply it BEFORE
   -- :colorscheme so the colorscheme can react to vim.o.background in its
   -- own setup. Colorschemes that don't care will just ignore it.
-  local declared = M.declared_background(spec, target)
+  local declared = background or M.declared_background(spec, target)
   if declared then
     vim.o.background = declared
   end
